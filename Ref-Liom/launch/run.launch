@@ -1,0 +1,23 @@
+<launch>
+    <!-- RUN nodelet-manager -->
+    <node pkg="nodelet" type="nodelet" args="manager" name="nodelet_manager" output="screen"> 
+      <param name="num_worker_threads" value="4"/>
+    </node>
+    <!-- RUN fast-lio -->
+    <rosparam file="$(find fast_lio)/config/robosense.yaml" command="load" />
+    <!-- <node pkg="nodelet" type="nodelet" args="load fastlio/fastlio_plugin nodelet_manager" name="fastlio_plugin_loader" output="screen"  respawn="true"/>  -->
+    <node pkg="fast_lio" type="fastlio_mapping" name="laserMapping" output="screen" /> 
+    
+    <!-- RUN ref-liom -->
+    <rosparam file="$(find ref_liom)/config/params.yaml" command="load" />
+    <node pkg="ref_liom" type="ref_liom_mapOptmization" name="ref_liom_mapOptmization" output="screen" />
+    
+    <!--- Robot State TF -->
+    <!-- <include file="$(find ref_liom)/launch/include/module_robot_state_publisher.launch" /> -->
+    <!--- Run Navsat -->
+    <!-- <include file="$(find ref_liom)/launch/include/module_navsat.launch" /> -->
+    <!-- RUN ref-provider -->
+    <!-- <include file="$(find ref_provider)/launch/ref_provider.launch"/> -->
+    <!--- Run Rviz-->
+    <node pkg="rviz" type="rviz" name="ref_liom_rviz" args="-d $(find ref_liom)/launch/include/config/loam_livox.rviz" />
+</launch>
