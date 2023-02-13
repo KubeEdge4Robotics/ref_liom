@@ -464,7 +464,7 @@ public:
 
         // ICP Settings
         static pcl::IterativeClosestPoint<PointType, PointType> icp;
-        icp.setMaxCorrespondenceDistance(historyKeyframeSearchRadius*2);
+        icp.setMaxCorrespondenceDistance(historyKeyframeSearchRadius);
         icp.setMaximumIterations(100);
         icp.setTransformationEpsilon(1e-6);
         icp.setEuclideanFitnessEpsilon(1e-6);
@@ -703,12 +703,11 @@ public:
         gtsam::Pose3 poseTo = latestOdomPose;
         if (keyPoses3D->points.empty())//还没有历史关键帧，第一个位姿
         {
-            // (Vector(6) << 1e-2, 1e-2, M_PI*M_PI, 1e8, 1e8, 1e8).finished()
-            noiseModel::Diagonal::shared_ptr priorNoise = noiseModel::Diagonal::Variances([1e-10, 1e-10, 1e-10, 1e10, 1e10, 1e10]); // rad*rad, meter*meter
+            noiseModel::Diagonal::shared_ptr priorNoise = noiseModel::Diagonal::Variances( (Vector(6) << 1e-2, 1e-2, 1e-2, 1e-2, 1e-2, 1e-2).finished() ); // rad*rad, meter*meter
             gtSAMgraph.add(PriorFactor<Pose3>(X(0), poseTo, priorNoise));
             initialEstimate.insert(X(0), poseTo);
         }else{
-            noiseModel::Diagonal::shared_ptr odometryNoise = noiseModel::Diagonal::Variances((Vector(6) << 1e-6, 1e-6, 1e-6, 1e-4, 1e-4, 1e-4).finished());
+            noiseModel::Diagonal::shared_ptr odometryNoise = noiseModel::Diagonal::Variances((Vector(6) << 1e-4, 1e-4, 1e-4, 1e-4, 1e-4, 1e-4).finished());
             gtsam::Pose3 poseFrom = keyPoses6D.back().pose;
             gtSAMgraph.add(BetweenFactor<Pose3>(X(keyPoses3D->size()-1), X(keyPoses3D->size()), poseFrom.between(poseTo), odometryNoise));
             initialEstimate.insert(X(keyPoses3D->size()), poseTo);
@@ -870,8 +869,8 @@ public:
         addLoopFactor();
         // reference model factor
         addRefModelFactor();
-        cout << "****************************************************" << endl;
-        gtSAMgraph.print("GTSAM Graph:\n");
+        // cout << "****************************************************" << endl;
+        // gtSAMgraph.print("GTSAM Graph:\n");
 
         // update iSAM
         isam->update(gtSAMgraph, initialEstimate);
@@ -896,8 +895,8 @@ public:
         isamCurrentEstimate = isam->calculateEstimate();
         //当前帧位姿结果
         latestPose6D = isamCurrentEstimate.at<Pose3>(X(keyPoses3D->size()));
-        cout << "****************************************************" << endl;
-        isamCurrentEstimate.print("Current estimate: ");
+        // cout << "****************************************************" << endl;
+        // isamCurrentEstimate.print("Current estimate: ");
         
         //keyPose3D加入当前关键帧位置
         thisPose3D.x = latestPose6D.translation().x();

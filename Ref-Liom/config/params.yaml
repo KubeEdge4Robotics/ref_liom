@@ -25,7 +25,7 @@ ref_liom:
   sensor: robosense                            # lidar sensor type, 'velodyne' or 'ouster' or 'livox'
   
   # voxel filter paprams
-  mappingLeafSize: 0.4                      # default: 0.4 - outdoor, 0.2 - indoor
+  mappingLeafSize: 0.2                      # default: 0.4 - outdoor, 0.2 - indoor
   
   # CPU Params
   numberOfCores: 8                              # number of cores for mapping optimization
@@ -39,17 +39,17 @@ ref_liom:
 
   # Loop closure
   loopClosureEnableFlag: true
-  loopClosureFrequency: 1.0                     # Hz, regulate loop closure constraint add frequency
-  surroundingKeyframeSize: 50                   # submap size (when loop closure enabled)
-  historyKeyframeSearchRadius: 15.0             # meters, key frame that is within n meters from current pose will be considerd for loop closure
+  loopClosureFrequency: 0.2                     # Hz, regulate loop closure constraint add frequency
+  surroundingKeyframeSize: 5                   # submap size (when loop closure enabled)
+  historyKeyframeSearchRadius: 10.0             # meters, key frame that is within n meters from current pose will be considerd for loop closure
   historyKeyframeSearchTimeDiff: 30.0           # seconds, key frame that is n seconds older will be considered for loop closure
-  historyKeyframeSearchNum: 25                  # number of hostory key frames will be fused into a submap for loop closure
-  historyKeyframeFitnessScore: 0.3              # icp threshold, the smaller the better alignment
+  historyKeyframeSearchNum: 5                  # number of hostory key frames will be fused into a submap for loop closure
+  historyKeyframeFitnessScore: 0.02              # icp threshold, the smaller the better alignment
 
   # Visualization
   globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius
   globalMapVisualizationPoseDensity: 10.0       # meters, global map visualization keyframe density
-  globalMapVisualizationLeafSize: 1.0           # meters, global map visualization cloud density
+  globalMapVisualizationLeafSize: 0.2           # meters, global map visualization cloud density
 
 
 # Navsat (convert GPS coordinates to Cartesian)

@@ -63,11 +63,11 @@
           <origin xyz="0 0 ${support_length/2}" rpy="0 0 0" />
     </xacro:VLP-16>
 
-    <!-- IMU 模块
+    <!-- IMU 模块 -->
     <xacro:include filename="$(find scout_gazebo)/urdf/imu.xacro"/>
     <xacro:imu sensor_name="imu" parent_link="base_link">
     <origin rpy="0 0 0" xyz="-0.03 0 ${base_z_size/2}"/>
-    </xacro:imu> -->
+    </xacro:imu>
 
     <!-- 机器人导航控制模块 -->
     <xacro:include filename="$(find scout_gazebo)/urdf/move.xacro" />
