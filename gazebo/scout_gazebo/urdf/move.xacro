@@ -24,7 +24,7 @@
     <xacro:joint_trans joint_name="rear_right_wheel" />
     <!-- 控制器 -->
     <gazebo>
-  		<plugin name="skid_steer_drive_controller" filename="libgazebo_ros_skid_steer_drive.so">
+  		<plugin name="skid_steer_drive_controller" filename="libgazebo_teleop_twist_keyboard.so">
     		<updateRate>100.0</updateRate>
     		<robotNamespace>/</robotNamespace>
     		<leftFrontJoint>front_left_wheel</leftFrontJoint>
@@ -37,6 +37,12 @@
     		<torque>20</torque>
     		<topicName>cmd_vel</topicName>
     		<broadcastTF>false</broadcastTF>
+    		<commandTopic>cmd_vel</commandTopic>
+    		<odometryTopic>odom</odometryTopic>
+    		<odometryFrame>odom</odometryFrame>
+				<covariance_x>0.0001</covariance_x>
+				<covariance_y>0.0001</covariance_y>
+				<covariance_yaw>0.0001</covariance_yaw>
   		</plugin>
 	</gazebo>
 	
@@ -47,6 +53,7 @@
       <odometryFrame>odom</odometryFrame>
       <odometryRate>20.0</odometryRate>
       <robotBaseFrame>base_link</robotBaseFrame>
+			<cmdTimeout>-1.000</cmdTimeout>
     </plugin>
   </gazebo>
 

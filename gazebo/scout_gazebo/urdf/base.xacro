@@ -59,14 +59,14 @@
     <!-- VLP16 激光雷达 -->
     <xacro:include filename="$(find scout_gazebo)/urdf/laser_support.xacro" />
     <xacro:include filename="$(find velodyne_description)/urdf/VLP-16.urdf.xacro"/>
-    <xacro:VLP-16 parent="support" name="velodyne" topic="/velodyne_points" organize_cloud="${organize_cloud}" hz="10" samples="440" gpu="${gpu}">
+    <xacro:VLP-16 parent="support" name="velodyne" topic="/velodyne_points" organize_cloud="${organize_cloud}" hz="10" samples="1800" max_range="150" gpu="${gpu}">
           <origin xyz="0 0 ${support_length/2}" rpy="0 0 0" />
     </xacro:VLP-16>
 
     <!-- IMU 模块 -->
     <xacro:include filename="$(find scout_gazebo)/urdf/imu.xacro"/>
     <xacro:imu sensor_name="imu" parent_link="base_link">
-    <origin rpy="0 0 0" xyz="-0.03 0 ${base_z_size/2}"/>
+    <origin rpy="0 0 0" xyz="0 0 0"/>
     </xacro:imu>
 
     <!-- 机器人导航控制模块 -->

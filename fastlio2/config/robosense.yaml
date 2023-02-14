@@ -1,5 +1,5 @@
 common:
-    odom_frame: "camera_init"     # fastlio世界坐标系
+    odom_frame: "map"     # fastlio世界坐标系
     body_frame: "body"            # IMU坐标系
     lid_topic:  "/rslidar_points" # lidar点云话题
     imu_topic:  "/imu/data"       # IMU数据话题

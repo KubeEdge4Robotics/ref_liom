@@ -52,6 +52,8 @@
 #include <visualization_msgs/Marker.h>
 #include <geometry_msgs/PoseWithCovariance.h>
 #include <geometry_msgs/Pose.h>
+#include <visualization_msgs/Marker.h>
+#include <visualization_msgs/MarkerArray.h>
 // TimeSyncronizer headers
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
@@ -133,7 +135,7 @@ public:
 	OBB bbox;
 	std::shared_ptr<igl::AABB<Eigen::MatrixXd, 3>> tree_ptr;
 	std::shared_ptr<Mesh> mesh_ptr;
-	PriorModel() : bbox(), tree_ptr(nullptr){};
+	PriorModel() : bbox(), mesh_ptr(nullptr),tree_ptr(nullptr){};
 	PriorModel(const std::shared_ptr<Mesh> &m) : mesh_ptr(m), tree_ptr(new igl::AABB<Eigen::MatrixXd, 3>)
 	{
 		tree_ptr->init(mesh_ptr->vertices, mesh_ptr->facets);
@@ -258,7 +260,7 @@ public:
 		ceres::Solver::Options options;
 		options.minimizer_type = ceres::TRUST_REGION;
 		options.linear_solver_type = ceres::DENSE_QR;
-		options.max_num_iterations = 4;
+		options.max_num_iterations = 10;
 		options.minimizer_progress_to_stdout = false;
 		options.check_gradients = false;
 		options.gradient_check_relative_precision = 1e-4;

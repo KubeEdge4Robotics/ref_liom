@@ -16,33 +16,37 @@
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/filters/conditional_removal.h>
 #include <pcl/filters/extract_indices.h>
-
+#include <ros/package.h>
+#include <json/json.h>
 using namespace std;
 
 ros::Publisher pub_prior_constraint;
 ros::Publisher pub_prior_lidar_pts;
 ros::Publisher pub_prior_mesh_pts_aligned;
 ros::Publisher pub_prior_mesh_pts_origin;
+ros::Publisher pub_prior_constraint_edge;
+
 nav_msgs::Path path;
 ros::Publisher ground_truthpub;
 std::mutex mtx_models;		 // 模型容器互斥量
 double bbox_scale;				 // 模型bbox的缩放因子
 int segment_num_threshold; // 分割得到的模型点云的最少数目
-int opti_num = 2;					 // ICP迭代次数
+int max_opt_num;					 // ICP迭代次数
+float search_radius;			 // Define the circular range for search
+string map_frame;
+string point_cloud_topic;
+string aftPgo_odom_topic;
+string model_poses_topic;
+
 // 先验模型
-std::vector<std::shared_ptr<PriorModel>> prior_models; // 先验模型容器
-pcl::PointCloud<pcl::PointXYZ> model_pos_cloud;				 // 模型位置点云
+std::vector<std::shared_ptr<PriorModel>> prior_models;																	 // 先验模型容器
+pcl::PointCloud<pcl::PointXYZ>::Ptr model_pos_cloud(new pcl::PointCloud<pcl::PointXYZ>); // 模型位置点云
 // Construct kd-tree object
 pcl::KdTreeFLANN<pcl::PointXYZ>::Ptr kdtree_model_pos(new pcl::KdTreeFLANN<pcl::PointXYZ>()); // 模型位置点云kdtree
-
-std::shared_ptr<Mesh> trucky(new Mesh);
-std::shared_ptr<igl::AABB<Eigen::MatrixXd, 3>> trucky_tree_ptr(new igl::AABB<Eigen::MatrixXd, 3>);
 
 std::shared_ptr<PriorModel> modelRecognition(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in, pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented)
 {
 	std::shared_ptr<PriorModel> prior_model(new PriorModel);
-	prior_model->mesh_ptr = trucky;
-	prior_model->tree_ptr = trucky_tree_ptr;
 	Eigen::Vector4f min_pt(-10, -10.5, -3, 1);
 	Eigen::Vector4f max_pt(0, 10.5, 10, 1);
 	pcl::CropBox<pcl::PointXYZ> crop_filter;
@@ -57,20 +61,25 @@ void estimateOBB(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in, std::shared_ptr<P
 {
 	Eigen::Vector4f centroid;
 	pcl::compute3DCentroid(*cloud_in, centroid);
-	// 去中心
-	for (auto point : cloud_in->points)
-	{
-		point.x -= centroid(0);
-		point.y -= centroid(1);
-		point.z -= centroid(2);
-	}
+	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented_model(new pcl::PointCloud<pcl::PointXYZ>);
+	// 世界系 -> model自身坐标系
+	Eigen::Affine3d T_w2m = Eigen::Affine3d::Identity();
+	T_w2m.pretranslate(Eigen::Vector3d(-centroid(0), -centroid(1), -centroid(2)));
 	Point2meshICP point2mesh_icp;
-	point2mesh_icp(cloud_in, prior_model);
-	Eigen::Affine3d T_w2m = point2mesh_icp.transform.translate(centroid.head<3>().cast<double>());
+	for (int i = 1; i <= max_opt_num; i++)
+	{
+		// 更新原始点云world_to_model
+		pcl::transformPointCloud(*cloud_in, *cloud_segmented_model, T_w2m); // 更新之后的模型系点云
+		point2mesh_icp(cloud_segmented_model, prior_model);
+		Eigen::Affine3d T_inc = point2mesh_icp.transform; // 位姿增量
+		T_w2m = T_inc * T_w2m;														// 更新T_w2m
+	}
 	double x, y, z, roll, pitch, yaw;
 	pcl::getTranslationAndEulerAngles(T_w2m, x, y, z, roll, pitch, yaw);
 	prior_model->bbox.trans << x, y, z;
 	prior_model->bbox.rot << roll, pitch, yaw;
+	// 将模型位置加入model_pos_cloud中
+	model_pos_cloud->push_back(pcl::PointXYZ(x, y, z));
 	// 估计bbox的尺寸
 	// 将矩阵转换为pcl点云
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -95,18 +104,73 @@ void ground_truthcallback(const nav_msgs::Odometry::ConstPtr &ground_truth)
 	this_pose_stamped.pose.position.y = ground_truth->pose.pose.position.y;
 	this_pose_stamped.pose.orientation = ground_truth->pose.pose.orientation;
 	this_pose_stamped.header.stamp = ros::Time::now();
-	this_pose_stamped.header.frame_id = "camera_init";
+	this_pose_stamped.header.frame_id = map_frame;
 
 	path.poses.push_back(this_pose_stamped);
 
 	path.header.stamp = ros::Time::now();
-	path.header.frame_id = "camera_init";
+	path.header.frame_id = map_frame;
 	ground_truthpub.publish(path);
 }
-
-void priorCloudHandler(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_msgs::PointCloud2ConstPtr &msg_cloud)
+void visualizePriorConstraint(const ros::Time &time_stamp, const Eigen::Vector3d &trans_b2w, const std::vector<Eigen::Vector3d> &model_pos)
 {
-	ROS_INFO("\033[1;31m xxxxPriorCloudHandlerStart, %f  \033[0m", ros::Time::now().toSec());
+	visualization_msgs::MarkerArray markerArray;
+	// loop nodes
+	visualization_msgs::Marker markerNode;
+	markerNode.header.frame_id = map_frame;
+	markerNode.header.stamp = time_stamp;
+	markerNode.action = visualization_msgs::Marker::ADD;
+	markerNode.type = visualization_msgs::Marker::SPHERE_LIST;
+	markerNode.ns = "prior_nodes";
+	markerNode.id = 0;
+	markerNode.pose.orientation.w = 1;
+	markerNode.scale.x = 0.3;
+	markerNode.scale.y = 0.3;
+	markerNode.scale.z = 0.3;
+	markerNode.color.r = 0;
+	markerNode.color.g = 0;
+	markerNode.color.b = 1;
+	markerNode.color.a = 1;
+	// loop edges
+	visualization_msgs::Marker markerEdge;
+	markerEdge.header.frame_id = map_frame;
+	markerEdge.header.stamp = time_stamp;
+	markerEdge.action = visualization_msgs::Marker::ADD;
+	markerEdge.type = visualization_msgs::Marker::LINE_LIST;
+	markerEdge.ns = "prior_edges";
+	markerEdge.id = 1;
+	markerEdge.pose.orientation.w = 1;
+	markerEdge.scale.x = 0.1;
+	markerEdge.color.r = 0;
+	markerEdge.color.g = 0.9;
+	markerEdge.color.b = 0;
+	markerEdge.color.a = 1;
+
+	for (auto &trans_m2w : model_pos)
+	{
+		geometry_msgs::Point p;
+		p.x = trans_b2w.x();
+		p.y = trans_b2w.y();
+		p.z = trans_b2w.z();
+		markerNode.points.push_back(p);
+		markerEdge.points.push_back(p);
+		p.x = trans_m2w.x();
+		p.y = trans_m2w.y();
+		p.z = trans_m2w.z();
+		markerNode.points.push_back(p);
+		markerEdge.points.push_back(p);
+	}
+
+	markerArray.markers.push_back(markerNode);
+	markerArray.markers.push_back(markerEdge);
+	pub_prior_constraint_edge.publish(markerArray);
+}
+void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_msgs::PointCloud2ConstPtr &msg_cloud)
+{
+	ROS_INFO("\033[1;31m xxxxsyncedCallbackStart, %f  \033[0m", ros::Time::now().toSec());
+	// 可视化用的
+	std::vector<Eigen::Vector3d> model_pos;
+
 	// PCL
 	pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud_body(new pcl::PointCloud<pcl::PointXYZ>); // pcl_cloud_msg要转化成的点云
 	pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud_world(new pcl::PointCloud<pcl::PointXYZ>);
@@ -122,8 +186,7 @@ void priorCloudHandler(const nav_msgs::Odometry::ConstPtr &msg_odom, const senso
 	Eigen::Affine3d T_b2w = poseMsg2Affine3d(msg_odom->pose.pose);
 	pcl::transformPointCloud(*pcl_cloud_body, *pcl_cloud_world, T_b2w.matrix());
 	pcl_cloud_body.reset();
-	// Define the circular range for search
-	float radius = 0.01f;
+
 	std::vector<int> pointIdxRadiusSearch;
 	std::vector<float> pointRadiusSquaredDistance;
 	pcl::PointXYZ query_pos; // 查询位置
@@ -131,10 +194,12 @@ void priorCloudHandler(const nav_msgs::Odometry::ConstPtr &msg_odom, const senso
 	query_pos.y = msg_odom->pose.pose.position.y;
 	query_pos.z = msg_odom->pose.pose.position.z;
 	// Search the kd-tree
-	unsigned int results = kdtree_model_pos->radiusSearch(query_pos, radius, pointIdxRadiusSearch, pointRadiusSquaredDistance);
+	kdtree_model_pos->setInputCloud(model_pos_cloud);
+	unsigned int results = kdtree_model_pos->radiusSearch(query_pos, search_radius, pointIdxRadiusSearch, pointRadiusSquaredDistance);
 	// 对于每一个可能提取到的先验模型
 	for (size_t i = 0; i < results; i++)
 	{
+		cout << "prior model process" << endl;
 		int model_idx = pointIdxRadiusSearch[i]; // 模型的索引
 		std::shared_ptr<PriorModel> &prior_model = prior_models[model_idx];
 		Eigen::Affine3d T_w2m; // 世界系->模型系
@@ -156,7 +221,10 @@ void priorCloudHandler(const nav_msgs::Odometry::ConstPtr &msg_odom, const senso
 		crop_filter.filter(*segmented_indices);
 		// 如果分割点云过少，则跳过当前循环
 		if (segmented_indices->size() < segment_num_threshold)
+		{
+			cout << "too few segmented points: " << segmented_indices->size() << endl;
 			continue;
+		}
 		// 分割后点云(model系)
 		pcl::copyPointCloud(*pcl_cloud_model, *segmented_indices, *cloud_segmented_model);
 		// 分割后点云(world系)
@@ -172,7 +240,7 @@ void priorCloudHandler(const nav_msgs::Odometry::ConstPtr &msg_odom, const senso
 		Eigen::VectorXi indices_facets; // list of indices into Element of closest mesh primitive
 		Eigen::MatrixXd closest_points; // list of closest points
 		// ceres ICP
-		for (int i = 1; i <= opti_num; i++)
+		for (int i = 1; i <= max_opt_num; i++)
 		{
 			Eigen::MatrixXd query_points(cloud_segmented_model->points.size(), 3); // query_points : list of query points
 			for (int i = 0; i < cloud_segmented_model->points.size(); i++)
@@ -273,28 +341,31 @@ void priorCloudHandler(const nav_msgs::Odometry::ConstPtr &msg_odom, const senso
 			// ICP迭代结束，点云发布
 			std::cout << "ICP update finish" << std::endl;
 			// 分割后的点云（世界坐标系）、迭代前的虚拟点云、迭代后的虚拟点云
-			publishCloud(pub_prior_lidar_pts, cloud_segmented_world, ros::Time::now(), "camera_init");
-			// publishCloud(pub_prior_mesh_pts_origin, mesh_cloud, ros::Time::now(), "camera_init");
+			publishCloud(pub_prior_lidar_pts, cloud_segmented_world, ros::Time::now(), map_frame);
 			// 迭代后的虚拟点云转换会world系发布
 			pcl::transformPointCloud(*mesh_cloud, *mesh_cloud, T_w2m.inverse()); // 更新之后的模型系点云
-			publishCloud(pub_prior_mesh_pts_aligned, mesh_cloud, ros::Time::now(), "camera_init");
+			publishCloud(pub_prior_mesh_pts_aligned, mesh_cloud, ros::Time::now(), map_frame);
 		}
 		// 发送模型与雷达帧的约束
 		geometry_msgs::PoseWithCovariance msg_constraint;
-		Eigen::Affine3d T_m2b = T_b2w * T_w2m.inverse();
+		Eigen::Affine3d T_m2b = (T_b2w * T_w2m).inverse(); // model->body约束
 		msg_constraint.pose = Affine3d2poseMsg(T_m2b);
-		msg_constraint.covariance[0] = model_idx;		// 模型id
-		msg_constraint.covariance[1] = keypose_idx; // 关键帧id
+		msg_constraint.covariance[0] = keypose_idx; // 关键帧id
+		msg_constraint.covariance[1] = model_idx;		// 模型id
 		msg_constraint.covariance[2] = 0.1 * var;		// 位移协方差
 		msg_constraint.covariance[3] = var;					// 旋转协方差
 		pub_prior_constraint.publish(msg_constraint);
+		// 可视化用的
+		model_pos.push_back(T_w2m.inverse().translation());
 	}
-
-	// 对于剩下的点云进行分割，得到在world系下模型扫描点云模型
-	std::shared_ptr<PriorModel> prior_model = modelRecognition(pcl_cloud_world, cloud_segmented_world);
-	// 将模型放入容器
-	prior_models.push_back(prior_model);
-	estimateOBB(cloud_segmented_world, prior_model);
+	// 可视化先验约束
+	if (model_pos.size() > 0)
+		visualizePriorConstraint(msg_odom->header.stamp, T_b2w.translation(), model_pos);
+	// // 对于剩下的点云进行分割，得到在world系下模型扫描点云模型
+	// std::shared_ptr<PriorModel> prior_model = modelRecognition(pcl_cloud_world, cloud_segmented_world);
+	// // 将模型放入容器
+	// prior_models.push_back(prior_model);
+	// estimateOBB(cloud_segmented_world, prior_model);
 }
 
 void modelPosesCallback(const nav_msgs::Path::ConstPtr &msg)
@@ -303,41 +374,86 @@ void modelPosesCallback(const nav_msgs::Path::ConstPtr &msg)
 	std::unique_lock<std::mutex> ulock(mtx_models);
 	for (auto &pose : msg->poses)
 	{
-		float x, y, z, roll, pitch, yaw;
-		pcl::getTranslationAndEulerAngles(poseMsg2Affine3f(pose.pose), x, y, z, roll, pitch, yaw);
-		prior_models[pose.header.seq]->bbox.trans = Eigen::Vector3f(x, y, z);
-		prior_models[pose.header.seq]->bbox.rot = Eigen::Vector3f(roll, pitch, yaw);
+		double x, y, z, roll, pitch, yaw;
+		pcl::getTranslationAndEulerAngles(poseMsg2Affine3d(pose.pose).inverse(), x, y, z, roll, pitch, yaw);
+		prior_models[pose.header.seq]->bbox.trans << x, y, z;
+		prior_models[pose.header.seq]->bbox.rot << roll, pitch, yaw;
+		model_pos_cloud->points[pose.header.seq].x = x;
+		model_pos_cloud->points[pose.header.seq].y = y;
+		model_pos_cloud->points[pose.header.seq].z = z;
 	}
 }
-
+// 从文件中读取先验信息
+bool modelInit(const string &path)
+{
+	// read json from stream
+	std::ifstream ifs;
+	ifs.open(path);
+	if (!ifs.is_open())
+		std::cerr << "ifstream open error!" << std::endl;
+	Json::Value root;
+	Json::CharReaderBuilder builder;
+	builder["collectComments"] = true;
+	JSONCPP_STRING errs;
+	if (!parseFromStream(builder, ifs, &root, &errs))
+	{
+		std::cerr << errs << std::endl;
+		return false;
+	}
+	for (auto &m : root["models"])
+	{
+		std::shared_ptr<Mesh> mesh_ptr(new Mesh);
+		igl::readOBJ(m["path"].asString(), mesh_ptr->vertices, mesh_ptr->facets);
+		std::shared_ptr<PriorModel> model_ptr(new PriorModel(mesh_ptr));
+		Eigen::Affine3d T_m2w;
+		pcl::getTransformation(m["trans"][0].asDouble(), m["trans"][1].asDouble(), m["trans"][2].asDouble(),
+													 m["rot"][0].asDouble(), m["rot"][1].asDouble(), m["rot"][2].asDouble(), T_m2w);
+		double x, y, z, roll, pitch, yaw;
+		pcl::getTranslationAndEulerAngles(T_m2w.inverse(), x, y, z, roll, pitch, yaw);
+		model_ptr->bbox.trans << x, y, z;
+		model_ptr->bbox.rot << roll, pitch, yaw;
+		model_ptr->bbox.min_pt << m["min_pt"][0].asDouble(), m["min_pt"][1].asDouble(), m["min_pt"][2].asDouble();
+		model_ptr->bbox.max_pt << m["max_pt"][0].asDouble(), m["max_pt"][1].asDouble(), m["max_pt"][2].asDouble();
+		model_pos_cloud->push_back(pcl::PointXYZ(model_ptr->bbox.trans(0), model_ptr->bbox.trans(1), model_ptr->bbox.trans(2)));
+		prior_models.push_back(model_ptr);
+	}
+	return true;
+}
 int main(int argc, char **argv)
 {
-	igl::readOBJ("/home/long/Code/RLOAM/models/trucky-10.obj", trucky->vertices, trucky->facets);
-	trucky_tree_ptr->init(trucky->vertices, trucky->facets);
-	ROS_INFO("\033[1;31m **********Point-Mesh Thread Started********** \033[0m");
-
 	ros::init(argc, argv, "ref_provider");
 	ros::NodeHandle nh;
 	ros::MultiThreadedSpinner spinner(2);
-	nh.param<double>("ref_provider/bbox_scale", bbox_scale, 1);
+	ROS_INFO("\033[1;31m **********Point-Mesh Thread Started********** \033[0m");
+	string json_path = ros::package::getPath("ref_provider") + "/config/params.json";
+	if (!modelInit(json_path))
+		std::cerr << "model init error" << std::endl;
+	nh.param<double>("ref_provider/bbox_scale", bbox_scale, 1.0);
 	nh.param<int>("ref_provider/segment_num_threshold", segment_num_threshold, 500);
-	nh.param<int>("ref_provider/mapping_opti_num", opti_num, 2);
+	nh.param<int>("ref_provider/max_opt_num", max_opt_num, 2);
+	nh.param<float>("ref_provider/search_radius", search_radius, 100.0);
+	nh.param<string>("ref_provider/map_frame", map_frame, "map");
+	nh.param<string>("ref_provider/point_cloud_topic", point_cloud_topic, "submap");
+	nh.param<string>("ref_provider/aftPgo_odom_topic", aftPgo_odom_topic, "aftPgo_odom");
+	nh.param<string>("ref_provider/model_poses_topic", model_poses_topic, "model_poses");
+
 	std::shared_ptr<message_filters::Subscriber<nav_msgs::Odometry>> subOdom;
 	std::shared_ptr<message_filters::Subscriber<sensor_msgs::PointCloud2>> subCloud;
 	typedef message_filters::sync_policies::ExactTime<nav_msgs::Odometry, sensor_msgs::PointCloud2> SyncPolicy;
 	std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> odom_cloud_sync;
-	subOdom = std::make_shared<message_filters::Subscriber<nav_msgs::Odometry>>(nh, "aftPgo_Odom", 10);
-	subCloud = std::make_shared<message_filters::Subscriber<sensor_msgs::PointCloud2>>(nh, "submap", 10);
-	odom_cloud_sync = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(10), *subOdom, *subCloud); // 10是消息队列长度
-	odom_cloud_sync->registerCallback(boost::bind(&priorCloudHandler, _1, _2));
-	ros::Subscriber subModelPoses = nh.subscribe<nav_msgs::Path>("model_poses", 10, modelPosesCallback); // 先验模型优化位姿
-	ros::Subscriber subgroundtruth = nh.subscribe<nav_msgs::Odometry>("base_pose_ground_truth", 100, ground_truthcallback);
+	subOdom = std::make_shared<message_filters::Subscriber<nav_msgs::Odometry>>(nh, aftPgo_odom_topic, 1000);
+	subCloud = std::make_shared<message_filters::Subscriber<sensor_msgs::PointCloud2>>(nh, point_cloud_topic, 1000);
+	odom_cloud_sync = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(1000), *subOdom, *subCloud); // 10是消息队列长度
+	odom_cloud_sync->registerCallback(boost::bind(&syncedCallback, _1, _2));
+	ros::Subscriber subModelPoses = nh.subscribe<nav_msgs::Path>(model_poses_topic, 1000, modelPosesCallback); // 先验模型优化位姿
+	ros::Subscriber subgroundtruth = nh.subscribe<nav_msgs::Odometry>("base_pose_ground_truth", 1000, ground_truthcallback);
 
-	pub_prior_constraint = nh.advertise<geometry_msgs::PoseWithCovariance>("prior_constraints", 10); // 先验模型约束
-	pub_prior_lidar_pts = nh.advertise<sensor_msgs::PointCloud2>("prior_lidar_pts", 10);
-	pub_prior_mesh_pts_aligned = nh.advertise<sensor_msgs::PointCloud2>("prior_mesh_pts_aligned", 10);
-	pub_prior_mesh_pts_origin = nh.advertise<sensor_msgs::PointCloud2>("prior_mesh_pts_origin", 10);
+	pub_prior_constraint = nh.advertise<geometry_msgs::PoseWithCovariance>("prior_constraints", 1000); // 先验模型约束
+	pub_prior_lidar_pts = nh.advertise<sensor_msgs::PointCloud2>("prior_lidar_pts", 1000);
+	pub_prior_mesh_pts_aligned = nh.advertise<sensor_msgs::PointCloud2>("prior_mesh_pts_aligned", 1000);
+	pub_prior_mesh_pts_origin = nh.advertise<sensor_msgs::PointCloud2>("prior_mesh_pts_origin", 1000);
 	ground_truthpub = nh.advertise<nav_msgs::Path>("ground_truth", 10, true);
+	pub_prior_constraint_edge = nh.advertise<visualization_msgs::MarkerArray>("prior_constraints_marker", 1000);
 
 	spinner.spin();
 	return 0;

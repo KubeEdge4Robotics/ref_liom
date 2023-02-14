@@ -10,7 +10,7 @@ ref_liom:
   # Frames
   bodyFrame: "body"
   odomFrame: "odom"
-  mapFrame: "camera_init"
+  mapFrame: "map"
 
   # GPS Settings
   useGpsElevation: false                      # if GPS elevation is bad, set to "false"
@@ -51,6 +51,15 @@ ref_liom:
   globalMapVisualizationPoseDensity: 10.0       # meters, global map visualization keyframe density
   globalMapVisualizationLeafSize: 0.2           # meters, global map visualization cloud density
 
+ref_provider:
+  map_frame: "map"
+  point_cloud_topic: "/ref_liom/submap" 
+  aftPgo_odom_topic: "/ref_liom/aftPgo_odom"
+  model_poses_topic: "/ref_liom/model_poses"
+  search_radius: 150.0
+  bbox_scale: 1
+  segment_num_threshold: 200
+  max_opti_num: 2
 
 # Navsat (convert GPS coordinates to Cartesian)
 navsat:

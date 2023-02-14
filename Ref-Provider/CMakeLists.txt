@@ -3,7 +3,7 @@ project(ref_provider)
 
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS "-std=c++14")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -g")
 
 list(PREPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)	# 增加对libigl.cmake的引用
 ## Compile as C++11, supported in ROS Kinetic and newer
@@ -26,6 +26,7 @@ find_package(catkin REQUIRED COMPONENTS
 )
 find_package(PCL REQUIRED)
 find_package(Ceres REQUIRED)
+find_package(jsoncpp REQUIRED)
 ################################################
 ## Declare ROS messages, services and actions ##
 ################################################
@@ -126,14 +127,14 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${PCL_INCLUDE_DIRS}
   ${CERES_INCLUDE_DIRS}
-  include
+	include
 )
+include_directories(${JSONCPP_INCLUDE_DIRS})
 
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 
-
 add_executable(${PROJECT_NAME} src/ref_provider.cpp)
-target_link_libraries(${PROJECT_NAME} PUBLIC igl::glfw ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${CERES_LIBRARIES})     
+target_link_libraries(${PROJECT_NAME} PUBLIC igl::glfw ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${CERES_LIBRARIES} ${JSONCPP_LIBRARIES})     
 
 
