@@ -11,10 +11,41 @@
 #include <gtsam/nonlinear/Marginals.h>
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/inference/Symbol.h>
+#include <gtsam/nonlinear/NonlinearFactor.h>
 
 #include <gtsam/nonlinear/ISAM2.h>
 
 using namespace gtsam;
+
+class Submap
+{ // 子地图信息
+public:
+	ros::Time time;
+	std::vector<uint32_t> keyCloudIndices; // 子图点云:包含原始激光帧的编号
+	gtsam::Pose3 pose;										 // 子图位姿
+	// 构造函数
+	Submap() : time(0), pose(gtsam::Pose3::Identity()){};
+	Submap(double msg_time, const gtsam::Pose3 &p) : time(msg_time), pose(p){};
+	Submap(ros::Time msg_stamp, const gtsam::Pose3 &p) : time(msg_stamp), pose(p){};
+};
+
+class FactorsWithValues
+{
+public:
+	// A shared_ptr to this class
+	typedef FactorsWithValues This;
+	typedef std::shared_ptr<This> shared_ptr;
+
+	gtsam::Values values;
+	std::vector<gtsam::NonlinearFactor::shared_ptr> factors;
+	bool inited;
+	FactorsWithValues() : inited(false){};
+	// 析构函数
+	virtual ~FactorsWithValues()
+	{
+		factors.clear();
+	}
+};
 
 using symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
 using symbol_shorthand::G; // GPS pose
@@ -22,13 +53,13 @@ using symbol_shorthand::M; // Model Pose3
 using symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
 bool holdForLoop = false;	 // 回环约束条件变量
+
 class mapOptimization : public ParamServer
 {
 public:
 	// gtsam
 	NonlinearFactorGraph gtSAMgraph;
 	Values initialEstimate;
-	Values optimizedEstimate;
 	ISAM2 *isam;
 	Values isamCurrentEstimate;
 	Eigen::MatrixXd poseCovariance;
@@ -79,33 +110,22 @@ public:
 	std::shared_ptr<message_filters::Subscriber<sensor_msgs::PointCloud2>> subCloud;
 	typedef message_filters::sync_policies::ExactTime<nav_msgs::Odometry, sensor_msgs::PointCloud2> SyncPolicy;
 	std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> odom_cloud_sync;
-
-	class Submap
-	{ // 子地图信息
-	public:
-		ros::Time time;
-		std::vector<uint32_t> keyCloudIndices; // 子图点云:包含原始激光帧的编号
-		gtsam::Pose3 pose;										 // 子图位姿
-		// 构造函数
-		Submap() : time(0), pose(gtsam::Pose3::Identity()){};
-		Submap(double msg_time, const gtsam::Pose3 &p) : time(msg_time), pose(p){};
-		Submap(ros::Time msg_stamp, const gtsam::Pose3 &p) : time(msg_stamp), pose(p){};
-	};
 	pcl::PointCloud<PointType>::Ptr keyPoses3D; // 历史关键帧位置
 	std::vector<PointTypePose> keyPoses6D;			// 历史关键帧位姿
 	pcl::PointCloud<PointType>::Ptr copy_keyPoses3D;
 	std::vector<PointTypePose> copy_keyPoses6D;
-	std::deque<pcl::PointCloud<PointType>::Ptr> keyClouds;				// 索引是关键帧id，值存放的是body系点云
-	std::unordered_map<int, std::shared_ptr<Submap>> hash_submap; // 索引是子图id，存放子图的信息
-	std::deque<geometry_msgs::PoseWithCovariance> refQueue;				// 先验信息msg队列
-	std::unordered_set<int> model_indices;												// 先验模型的编号
-	ros::Publisher pubModelPoses;																	// 优化模型位姿发布者
-	nav_msgs::Path::Ptr globalPath;																// 全局校正轨迹
-	nav_msgs::Path::Ptr modelPoses;																// 优化后模型位姿
-	gtsam::Pose3 lastOdomPose;																		// 上一里程计位姿
-	gtsam::Pose3 thisOdomPose;																		// 最新里程计位姿
-	gtsam::Pose3 latestPose6D;																		// 最新图优化位姿
-
+	std::deque<pcl::PointCloud<PointType>::Ptr> keyClouds;							 // 索引是关键帧id，值存放的是body系点云
+	std::unordered_map<int, std::shared_ptr<Submap>> hash_submap;				 // 索引是子图id，存放子图的信息
+	nav_msgs::Path::Ptr globalPath;																			 // 全局校正轨迹
+	nav_msgs::Path::Ptr modelPoses;																			 // 优化后模型位姿
+	gtsam::Pose3 lastOdomPose;																					 // 上一里程计位姿
+	gtsam::Pose3 thisOdomPose;																					 // 最新里程计位姿
+	gtsam::Pose3 latestPose6D;																					 // 最新图优化位姿
+	ros::Publisher pubModelPoses;																				 // 优化模型位姿发布者
+	std::deque<geometry_msgs::PoseWithCovariance> refQueue;							 // 先验信息msg队列
+	std::unordered_map<int, FactorsWithValues::shared_ptr> modelInfoSet; // 先验模型的信息
+	std::unordered_set<int> modelReady;
+	int minModelFactorNum = 3;
 	mapOptimization()
 	{
 		ISAM2Params parameters;
@@ -148,6 +168,11 @@ public:
 		downSizeFilterSurroundingKeyPoses.setLeafSize(surroundingKeyframeDensity, surroundingKeyframeDensity, surroundingKeyframeDensity); // for surrounding key poses of scan-to-map optimization
 
 		allocateMemory();
+	}
+
+	virtual ~mapOptimization()
+	{
+		delete[] isam;
 	}
 
 	void allocateMemory()
@@ -728,7 +753,7 @@ public:
 			// gtsam::Pose3 poseFrom = keyPoses6D.back().pose;
 			gtsam::Pose3 poseFrom = lastOdomPose;
 			gtSAMgraph.add(BetweenFactor<Pose3>(X(keyPoses3D->size() - 1), X(keyPoses3D->size()), poseFrom.between(poseTo), odometryNoise));
-			initialEstimate.insert(X(keyPoses3D->size()), keyPoses6D.back().pose * lastOdomPose.inverse() * thisOdomPose );
+			initialEstimate.insert(X(keyPoses3D->size()), keyPoses6D.back().pose * lastOdomPose.inverse() * thisOdomPose);
 		}
 		lastOdomPose = poseTo;
 	}
@@ -862,21 +887,52 @@ public:
 		{
 			geometry_msgs::PoseWithCovariance &refMsg = refQueue.front();
 			gtsam::Pose3 poseBetween = poseMsg2gtsamPose(refMsg.pose);					// model->body
-			uint32_t keypose_idx = static_cast<uint32_t>(refMsg.covariance[0]); // 关键帧id
-			int model_idx = static_cast<int>(refMsg.covariance[1]);							// 模型id
-			double var_trans = 100 * refMsg.covariance[2];														// 位移协方差
-			double var_rot = 100 * refMsg.covariance[3];															// 旋转协方差
-			noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << var_trans, var_trans, var_trans, var_rot, var_rot, var_rot).finished());
-			gtSAMgraph.add(BetweenFactor<Pose3>(X(keypose_idx), M(model_idx), poseBetween, refNoise)); // 加入模型因子
-			gtsam::Pose3 poseFrom = keyPoses6D[keypose_idx].pose;																			 // 关键帧位姿
-			if (model_indices.find(model_idx) == model_indices.end())
+			uint32_t keyposeIdx = static_cast<uint32_t>(refMsg.covariance[0]); // 关键帧id
+			int modelIdx = static_cast<int>(refMsg.covariance[1]);							// 模型id
+			gtsam::Pose3 poseFrom = keyPoses6D[keyposeIdx].pose;								// 关键帧位姿
+			gtsam::Pose3 poseTo = poseFrom * poseBetween;
+			double var_trans = 1000 * refMsg.covariance[2];	 // 位移协方差
+			double var_rot = 10000 * refMsg.covariance[3]; // 旋转协方差
+			cout << "var_trans: " << var_trans << "var_rot:" << var_rot << endl;
+			// If this is the first iteration, add a prior on the first pose to set the
+			// coordinate frame and a prior on the first landmark to set the scale Also,
+			// as iSAM solves incrementally, we must wait until each is observed at
+			// least twice before adding it to iSAM.
+			if (modelReady.count(modelIdx) == 0)
 			{
-				initialEstimate.insert(M(model_idx), poseFrom * poseBetween); // 加入初值
-				model_indices.emplace(model_idx);															// 将模型id加入集合model_indices中
+				if (modelInfoSet.count(modelIdx) == 0)
+				{
+					modelInfoSet.emplace(modelIdx, std::make_shared<FactorsWithValues>());
+					(modelInfoSet[modelIdx]->values).insert(M(modelIdx), poseTo);																																														 // 加入初值
+					noiseModel::Diagonal::shared_ptr priorNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(1e-2), Vector3::Constant(1e-2)).finished()); // rad*rad, meter*meter
+					noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(var_trans), Vector3::Constant(var_rot)).finished());
+					(modelInfoSet[modelIdx]->factors).push_back(gtsam::NonlinearFactor::shared_ptr(new PriorFactor<Pose3>(M(modelIdx), poseTo, priorNoise)));
+					(modelInfoSet[modelIdx]->factors).push_back(BetweenFactor<Pose3>::shared_ptr(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, refNoise)));
+				}
+				else
+				{
+					noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(var_trans), Vector3::Constant(var_rot)).finished());
+					BetweenFactor<Pose3>::shared_ptr refFactor(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, refNoise));
+					(modelInfoSet[modelIdx]->factors).push_back(refFactor);// 加入模型因子
+					if (modelInfoSet[modelIdx]->factors.size() > minModelFactorNum){
+						initialEstimate.insert(modelInfoSet[modelIdx]->values);
+						gtSAMgraph.add_factors(modelInfoSet[modelIdx]->factors);
+						modelInfoSet.erase(modelIdx);//删除模型因子与初值信息
+						modelReady.emplace(modelIdx);
+						aLoopIsClosed = true;
+					}			
+				}
 			}
+			else
+			{
+				noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(var_trans), Vector3::Constant(var_rot)).finished());
+				BetweenFactor<Pose3>::shared_ptr refFactor(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, refNoise));
+				gtSAMgraph.add(refFactor); // 加入模型因子
+				aLoopIsClosed = true;
+			}
+
 			refQueue.pop_front();
 		}
-		aLoopIsClosed = true;
 	}
 	/**
 	 * 设置当前帧为关键帧并执行因子图优化
@@ -989,12 +1045,12 @@ public:
 		{
 			// 清空模型位姿容器
 			modelPoses->poses.clear();
-			for (auto idx : model_indices)
+			for (auto &ele : modelInfoSet)
 			{
 				geometry_msgs::PoseStamped pose_stamped;
-				pose_stamped.header.seq = idx;
+				pose_stamped.header.seq = ele.first;
 				pose_stamped.header.frame_id = mapFrame;
-				pose_stamped.pose = gtsamPose2poseMsg(isamCurrentEstimate.at<Pose3>(M(idx)));
+				pose_stamped.pose = gtsamPose2poseMsg(isamCurrentEstimate.at<Pose3>(M(ele.first)));
 				modelPoses->poses.push_back(pose_stamped);
 				modelPoses->header.stamp = timeLaserInfoStamp;
 				pubModelPoses.publish(modelPoses);

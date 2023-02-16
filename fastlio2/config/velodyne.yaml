@@ -17,9 +17,9 @@ preprocess:
     feature_extract_enable: false  # 是否提取特征点（FAST_LIO2默认不进行特征点提取）
 
 mapping:
-    max_iteration: 3              # 卡尔曼滤波的最大迭代次数
+    max_iteration: 6              # 卡尔曼滤波的最大迭代次数
     filter_size_single_frame: 0.2 # 一帧雷达点云VoxelGrid降采样时的体素大小
-    filter_size_map_ikdtree: 0.4  # 局部地图ikdtree降采样时的体素大小
+    filter_size_map_ikdtree: 0.5  # 局部地图ikdtree降采样时的体素大小
     cube_side_length: 1000         # 局部地图立方体的边长
     acc_cov: 0.1                  # IMU陀螺仪的协方差
     gyr_cov: 0.1                  # IMU加速度计的协方差

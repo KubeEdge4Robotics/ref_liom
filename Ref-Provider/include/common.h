@@ -72,7 +72,6 @@
 #include <ceres/rotation.h>
 // igl
 #include <igl/opengl/glfw/Viewer.h>
-#include <igl/readOBJ.h>
 #include <igl/AABB.h>
 #include <igl/point_mesh_squared_distance.h>
 
@@ -112,8 +111,8 @@ struct Mesh
 {
 	Eigen::MatrixXd vertices; // vertices : list of vertex positions 顶点集
 	Eigen::MatrixXi facets;		// facets : list of mesh primitives(vetex indices of one facet)一个面片包含的顶点索引
-													// 一行代表一个面片包含的顶点索引
-	Eigen::Vector3f min_pt; // Mesh bounding box size
+														// 一行代表一个面片包含的顶点索引
+	Eigen::Vector3f min_pt;		// Mesh bounding box size
 	Eigen::Vector3f max_pt;
 };
 // Oriented Bounding Box
@@ -135,7 +134,7 @@ public:
 	OBB bbox;
 	std::shared_ptr<igl::AABB<Eigen::MatrixXd, 3>> tree_ptr;
 	std::shared_ptr<Mesh> mesh_ptr;
-	PriorModel() : bbox(), mesh_ptr(nullptr),tree_ptr(nullptr){};
+	PriorModel() : bbox(), mesh_ptr(nullptr), tree_ptr(nullptr){};
 	PriorModel(const std::shared_ptr<Mesh> &m) : mesh_ptr(m), tree_ptr(new igl::AABB<Eigen::MatrixXd, 3>)
 	{
 		tree_ptr->init(mesh_ptr->vertices, mesh_ptr->facets);
@@ -196,31 +195,64 @@ inline geometry_msgs::Pose Affine3d2poseMsg(const Eigen::Affine3d &aff)
 class Point2meshICP
 {
 protected:
+	double max_correspondence_dist_;
 	double fitness_;
+	int outlier_num_;
+	Eigen::Affine3d transform_;
+	double outlier_threshold_;
+	bool converged_;
+	bool set_rot_constant_;
 
 public:
-	Eigen::Affine3d transform;
-	double max_correspondence_dist;
-	Point2meshICP() : fitness_(0), max_correspondence_dist(0.5), transform(Eigen::Affine3d::Identity()){};
-	void operator()(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented_model, std::shared_ptr<PriorModel> prior_model)
+	// constructor
+	Point2meshICP() : max_correspondence_dist_(0.5), fitness_(std::numeric_limits<double>::max()),
+										outlier_num_(0), transform_(Eigen::Affine3d::Identity()), outlier_threshold_(1.0),
+										converged_(false), set_rot_constant_(false){};
+	Point2meshICP(double max_dist) : max_correspondence_dist_(0.5), fitness_(std::numeric_limits<double>::max()),
+																	 outlier_num_(0), transform_(Eigen::Affine3d::Identity()), outlier_threshold_(1.0),
+																	 converged_(false), set_rot_constant_(false){};
+	void setRotCostant()
 	{
+		set_rot_constant_ = true;
+	}
+	void setRotVariable()
+	{
+		set_rot_constant_ = false;
+	}
+	// set max outliers proportion
+	void setOutlierThreshold(double threshold)
+	{
+		outlier_threshold_ = threshold;
+	}
+	// set max distance between correspondences
+	void setMaxCorrespondenceDist(double max_dist)
+	{
+		max_correspondence_dist_ = max_dist;
+	}
+	// solve one point-mesh ICP
+	bool operator()(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented_model, std::shared_ptr<PriorModel> prior_model, pcl::PointCloud<pcl::PointXYZ>::Ptr mesh_cloud)
+	{
+		converged_ = false; // 重置收敛标志
+		outlier_num_ = 0;		// 重置outlier_num_
 		// 搜索虚拟点+点云网格配准
 		Eigen::VectorXd sqrD;						// list of squared distances
 		Eigen::VectorXi indices_facets; // list of indices into Element of closest mesh primitive
 		Eigen::MatrixXd closest_points; // list of closest points
 		// ceres ICP
-		Eigen::MatrixXd query_points(cloud_segmented_model->points.size(), 3); // query_points : list of query points
-		for (int i = 0; i < cloud_segmented_model->points.size(); i++)
+		Eigen::MatrixXd query_points(cloud_segmented_model->size(), 3); // query_points : list of query points
+		for (int i = 0; i < cloud_segmented_model->size(); i++)
 		{
 			query_points(i, 0) = cloud_segmented_model->points[i].x;
 			query_points(i, 1) = cloud_segmented_model->points[i].y;
 			query_points(i, 2) = cloud_segmented_model->points[i].z;
 		}
 		// 更新mesh匹配
-		pcl::PointCloud<pcl::PointXYZ>::Ptr mesh_cloud(new pcl::PointCloud<pcl::PointXYZ>);
+		mesh_cloud->clear();
+		// pcl::PointCloud<pcl::PointXYZ>::Ptr mesh_cloud(new pcl::PointCloud<pcl::PointXYZ>);
 		TicToc t_point_mesh; // 搜索匹配点的时间
 		prior_model->tree_ptr->squared_distance(prior_model->mesh_ptr->vertices, prior_model->mesh_ptr->facets, query_points, sqrD, indices_facets, closest_points);
-		std::cout << "prior_lidar_pts size: " << cloud_segmented_model->points.size() << "\n"
+		std::cout << "*******************************" << std::endl;
+		std::cout << "prior_lidar_pts size: " << cloud_segmented_model->size() << "\n"
 							<< "point-mesh time (ms): " << t_point_mesh.toc() << std::endl;
 		uint32_t meshnum = closest_points.rows(); // mesh虚拟点数目
 		for (uint32_t i = 0; i < meshnum; i++)
@@ -236,7 +268,7 @@ public:
 		double parameter[7] = {0, 0, 0, 1, 0, 0, 0}; // 迭代初值
 		Eigen::Map<Eigen::Quaterniond> q(parameter);
 		Eigen::Map<Eigen::Vector3d> t(parameter + 4);
-		ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
+		ceres::LossFunction *loss_function = new ceres::CauchyLoss(1.0);//ceres::HuberLoss(0.1); 
 		ceres::LossFunction *loss_function_scaled =
 				new ceres::ScaledLoss(loss_function, scale_mesh, ceres::Ownership::DO_NOT_TAKE_OWNERSHIP);
 		ceres::LocalParameterization *q_parameterization = new ceres::EigenQuaternionParameterization();
@@ -244,38 +276,86 @@ public:
 		ceres::Problem problem(problem_options);
 		problem.AddParameterBlock(parameter, 4, q_parameterization); // 添加参数块，旋转四元数
 		problem.AddParameterBlock(parameter + 4, 3);
+		if (set_rot_constant_)
+		{
+			problem.SetParameterBlockConstant(parameter);
+		}
+		else
+		{
+			problem.SetParameterBlockVariable(parameter);
+		}
 		for (int i = 0; i < meshnum; i++)
 		{
 			pcl::PointXYZ &lidarPt = cloud_segmented_model->points[i];
 			pcl::PointXYZ &meshPt = mesh_cloud->points[i];
 			Eigen::Vector3d lidar_pt(lidarPt.x, lidarPt.y, lidarPt.z);
 			Eigen::Vector3d mesh_pt(meshPt.x, meshPt.y, meshPt.z);
-			if ((lidar_pt - mesh_pt).norm() < max_correspondence_dist)
+			ceres::CostFunction *cost_function = PointMeshFactor::Create(lidar_pt, mesh_pt);
+			problem.AddResidualBlock(cost_function, loss_function_scaled, parameter, parameter + 4);
+			if ((lidar_pt - mesh_pt).norm() > max_correspondence_dist_)
 			{
-				ceres::CostFunction *cost_function = PointMeshFactor::Create(lidar_pt, mesh_pt);
-				problem.AddResidualBlock(cost_function, loss_function_scaled, parameter, parameter + 4);
+				// 异常值 + 1
+				outlier_num_++;
 			}
 		}
+		double outlier_proportion = static_cast<double>(outlier_num_) / static_cast<double>(cloud_segmented_model->size());
+		// if (outlier_proportion > outlier_threshold_)
+		// 	return false;
 		TicToc t_solver;
 		ceres::Solver::Options options;
 		options.minimizer_type = ceres::TRUST_REGION;
-		options.linear_solver_type = ceres::DENSE_QR;
-		options.max_num_iterations = 10;
+		options.linear_solver_type = ceres::SPARSE_NORMAL_CHOLESKY; // ceres::DENSE_QR;
+		options.dense_linear_algebra_library_type = ceres::LAPACK;
+		options.sparse_linear_algebra_library_type = ceres::SUITE_SPARSE;
+		options.max_num_iterations = 100;
 		options.minimizer_progress_to_stdout = false;
 		options.check_gradients = false;
 		options.gradient_check_relative_precision = 1e-4;
+		options.parameter_tolerance = 1e-10;
+		options.function_tolerance = 1e-10;
+		options.gradient_tolerance = 1e-14;
+		options.max_solver_time_in_seconds = 0.5;
+		options.num_threads = 8;
+		options.initial_trust_region_radius = 1e4;											 // 初始信任区域的大小。
+		options.max_trust_region_radius = 1e20;													 // 信任区域半径最大值。
+		options.min_trust_region_radius = 1e-32;												 // 信任区域的最小值。当信任区域小于此值，会停止优化。
+		options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT; // 还有ceres::DOGLEG
+		// options.dogleg_type = ceres::SUBSPACE_DOGLEG // 使用DOGLEG方法时指定
+		// options.min_relative_decrease = ;//信任域步长(trust region step)相对减少的最小值。
+		// options.min_lm_diagonal = ;//LEVENBERG MARQUARDT算法使用对角矩阵来规范（regularize）信任域步长。 这是该对角矩阵的值的下限
+		// options.max_lm_diagonal = ;//LEVENBERG MARQUARDT算法使用对角矩阵来规范（regularize）信任域步长。这是该对角矩阵的值的上限。
 		ceres::Solver::Summary summary;
 		ceres::Solve(options, &problem, &summary);
 		fitness_ = summary.final_cost; // 最终函数值
-		// std::cout << summary.BriefReport() << "\n";
-
+		// 结果输出
+		std::cout << "fitness : " << fitness_ << std::endl;
+		std::cout << "temination_type:" << summary.termination_type << std::endl;					 // 0:CONVERGENCE, 1:NO_CONVERGENCE, 3:USER_SUCCESS
+		std::cout << "num_successful_steps:" << summary.num_successful_steps << std::endl; // 最终被接受的迭代次数
+		std::cout << "*******************************" << std::endl;
+		if (summary.termination_type == 1)
+		{
+			converged_ = false;
+			return false;
+		}
+		else
+			converged_ = true;
+		// std::cout << summary.BriefReport() << std::endl;
 		// 优化结果
-		transform.setIdentity();
-		transform.rotate(q);
-		transform.pretranslate(t);
+		transform_.setIdentity();
+		transform_.rotate(q);
+		transform_.pretranslate(t);
+		return true;
 	}
-	double get_fitness()
+	inline double getFitness()
 	{
-		return fitness_;
+		return (fitness_);
+	}
+	inline Eigen::Affine3d getTransform()
+	{
+		return (transform_);
+	}
+	inline bool hasConverged()
+	{
+		return (converged_);
 	}
 };

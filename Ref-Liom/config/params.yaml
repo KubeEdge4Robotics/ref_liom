@@ -1,7 +1,7 @@
 ref_liom:
   # Topics
   pointCloudTopic: "/cloud_registered_body"   # Point cloud data
-  odomTopic: "/Odometry"                   # IMU pre-preintegration odometry, same frequency as IMU
+  odomTopic: "/Odometry"                      # IMU pre-preintegration odometry, same frequency as IMU
   imuTopic: "/imu/data"                       # IMU data
   gpsTopic: "odometry/gpsz"                   # GPS odometry topic from navsat, see module_navsat.launch file
   loopTopic: "/loop_closure_detection"
@@ -11,6 +11,9 @@ ref_liom:
   bodyFrame: "body"
   odomFrame: "odom"
   mapFrame: "map"
+  
+  # submap
+  submapFrameNum: 2
 
   # GPS Settings
   useGpsElevation: false                      # if GPS elevation is bad, set to "false"
@@ -18,18 +21,18 @@ ref_liom:
   poseCovThreshold: 25.0                      # m^2, threshold for using GPS data
   
   # Export settings
-  savePCD: true                              # https://github.com/TixiaoShan/LIO-SAM/issues/3
-  savePCDDirectory: "/Code/rosbag/ref_liom/"        # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
+  savePCD: false                              # https://github.com/TixiaoShan/LIO-SAM/issues/3
+  savePCDDirectory: "/Code/rosbag/ref_liom/"  # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
 
   # Sensor Settings
-  sensor: robosense                            # lidar sensor type, 'velodyne' or 'ouster' or 'livox'
+  sensor: robosense                           # lidar sensor type, 'velodyne' or 'ouster' or 'livox'
   
   # voxel filter paprams
-  mappingLeafSize: 0.2                      # default: 0.4 - outdoor, 0.2 - indoor
+  mappingLeafSize: 0.2                        # default: 0.4 - outdoor, 0.2 - indoor
   
   # CPU Params
-  numberOfCores: 8                              # number of cores for mapping optimization
-  mappingProcessInterval: 0.2                  # seconds, regulate mapping frequency
+  numberOfCores: 8                            # number of cores for mapping optimization
+  mappingProcessInterval: 0.2                 # seconds, regulate mapping frequency
   
   # Surrounding map
   surroundingkeyframeAddingDistThreshold: 1.0   # meters, regulate keyframe adding threshold
@@ -40,11 +43,11 @@ ref_liom:
   # Loop closure
   loopClosureEnableFlag: true
   loopClosureFrequency: 0.2                     # Hz, regulate loop closure constraint add frequency
-  surroundingKeyframeSize: 5                   # submap size (when loop closure enabled)
+  surroundingKeyframeSize: 5                    # submap size (when loop closure enabled)
   historyKeyframeSearchRadius: 10.0             # meters, key frame that is within n meters from current pose will be considerd for loop closure
   historyKeyframeSearchTimeDiff: 30.0           # seconds, key frame that is n seconds older will be considered for loop closure
-  historyKeyframeSearchNum: 5                  # number of hostory key frames will be fused into a submap for loop closure
-  historyKeyframeFitnessScore: 0.02              # icp threshold, the smaller the better alignment
+  historyKeyframeSearchNum: 5                   # number of hostory key frames will be fused into a submap for loop closure
+  historyKeyframeFitnessScore: 0.02             # icp threshold, the smaller the better alignment
 
   # Visualization
   globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius
@@ -56,10 +59,12 @@ ref_provider:
   point_cloud_topic: "/ref_liom/submap" 
   aftPgo_odom_topic: "/ref_liom/aftPgo_odom"
   model_poses_topic: "/ref_liom/model_poses"
-  search_radius: 150.0
-  bbox_scale: 1
+  search_radius: 100.0
+  track_bbox_scale: 1.2
   segment_num_threshold: 200
-  max_opti_num: 2
+  max_opti_num: 10
+  fitness_threshold: 0.1
+  max_correspondence_dist: 10
 
 # Navsat (convert GPS coordinates to Cartesian)
 navsat:

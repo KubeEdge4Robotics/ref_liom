@@ -18,6 +18,8 @@
 #include <pcl/filters/extract_indices.h>
 #include <ros/package.h>
 #include <json/json.h>
+#include <igl/read_triangle_mesh.h>
+#include <igl/per_face_normals.h>
 using namespace std;
 
 ros::Publisher pub_prior_constraint;
@@ -25,14 +27,18 @@ ros::Publisher pub_prior_lidar_pts;
 ros::Publisher pub_prior_mesh_pts_aligned;
 ros::Publisher pub_prior_mesh_pts_origin;
 ros::Publisher pub_prior_constraint_edge;
+ros::Publisher pub_model_cloud_normal;
 
 nav_msgs::Path path;
 ros::Publisher ground_truthpub;
-std::mutex mtx_models;		 // 模型容器互斥量
-double bbox_scale;				 // 模型bbox的缩放因子
-int segment_num_threshold; // 分割得到的模型点云的最少数目
-int max_opt_num;					 // ICP迭代次数
-float search_radius;			 // Define the circular range for search
+ros::Publisher pub_model_pose;
+std::mutex mtx_models;					// 模型容器互斥量
+double track_bbox_scale;				// 模型bbox的缩放因子
+int segment_num_threshold;			// 分割得到的模型点云的最少数目
+int max_opti_num;								// ICP迭代次数
+float search_radius;						// Define the circular range for search
+double fitness_threshold;				// point-mesh-icp评估阈值
+double max_correspondence_dist; // point-mesh匹配最大距离
 string map_frame;
 string point_cloud_topic;
 string aftPgo_odom_topic;
@@ -62,17 +68,18 @@ void estimateOBB(pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in, std::shared_ptr<P
 	Eigen::Vector4f centroid;
 	pcl::compute3DCentroid(*cloud_in, centroid);
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented_model(new pcl::PointCloud<pcl::PointXYZ>);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr mesh_cloud(new pcl::PointCloud<pcl::PointXYZ>); // mesh虚拟匹配点
 	// 世界系 -> model自身坐标系
 	Eigen::Affine3d T_w2m = Eigen::Affine3d::Identity();
 	T_w2m.pretranslate(Eigen::Vector3d(-centroid(0), -centroid(1), -centroid(2)));
 	Point2meshICP point2mesh_icp;
-	for (int i = 1; i <= max_opt_num; i++)
+	for (int i = 1; i <= max_opti_num; i++)
 	{
 		// 更新原始点云world_to_model
 		pcl::transformPointCloud(*cloud_in, *cloud_segmented_model, T_w2m); // 更新之后的模型系点云
-		point2mesh_icp(cloud_segmented_model, prior_model);
-		Eigen::Affine3d T_inc = point2mesh_icp.transform; // 位姿增量
-		T_w2m = T_inc * T_w2m;														// 更新T_w2m
+		point2mesh_icp(cloud_segmented_model, prior_model, mesh_cloud);
+		Eigen::Affine3d T_inc = point2mesh_icp.getTransform(); // 位姿增量
+		T_w2m = T_inc * T_w2m;																 // 更新T_w2m
 	}
 	double x, y, z, roll, pitch, yaw;
 	pcl::getTranslationAndEulerAngles(T_w2m, x, y, z, roll, pitch, yaw);
@@ -159,6 +166,11 @@ void visualizePriorConstraint(const ros::Time &time_stamp, const Eigen::Vector3d
 		p.z = trans_m2w.z();
 		markerNode.points.push_back(p);
 		markerEdge.points.push_back(p);
+		// 模型绝对位姿
+		p.x = -prior_models.front()->bbox.trans.x();
+		p.y = -prior_models.front()->bbox.trans.y();
+		p.z = -prior_models.front()->bbox.trans.z();
+		markerNode.points.push_back(p);
 	}
 
 	markerArray.markers.push_back(markerNode);
@@ -178,7 +190,6 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented_body(new pcl::PointCloud<pcl::PointXYZ>);	 // 分割算法得到的点云(body系)
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented_world(new pcl::PointCloud<pcl::PointXYZ>); // 分割得到的点云(世界系)
 	pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_segmented_model(new pcl::PointCloud<pcl::PointXYZ>); // 分割得到的点云(model系)
-	double var = 0;																																								 // 协方差
 	uint32_t keypose_idx = msg_cloud->header.seq;																									 // 关键帧id
 	// 转化：ROS 点云 -> PCL
 	pcl::fromROSMsg(*msg_cloud, *pcl_cloud_body);
@@ -199,7 +210,6 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 	// 对于每一个可能提取到的先验模型
 	for (size_t i = 0; i < results; i++)
 	{
-		cout << "prior model process" << endl;
 		int model_idx = pointIdxRadiusSearch[i]; // 模型的索引
 		std::shared_ptr<PriorModel> &prior_model = prior_models[model_idx];
 		Eigen::Affine3d T_w2m; // 世界系->模型系
@@ -210,9 +220,11 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 		}
 		pcl::transformPointCloud(*pcl_cloud_world, *pcl_cloud_model, T_w2m); // 分割点云由世界系转换到模型系下
 		pcl::IndicesPtr segmented_indices(new std::vector<int>);						 // 分割点云的索引
-		// 设置bounding box的角点
-		Eigen::Vector4f min_pt(bbox_scale * prior_model->bbox.min_pt(0), bbox_scale * prior_model->bbox.min_pt(1), bbox_scale * prior_model->bbox.min_pt(2), 1);
-		Eigen::Vector4f max_pt(bbox_scale * prior_model->bbox.max_pt(0), bbox_scale * prior_model->bbox.max_pt(1), bbox_scale * prior_model->bbox.max_pt(2), 1);
+		// 设置跟踪bounding box
+		Eigen::Vector4f min_pt = Eigen::Vector4f::Ones();
+		Eigen::Vector4f max_pt = Eigen::Vector4f::Ones();
+		min_pt.head<3>() = track_bbox_scale * prior_model->bbox.min_pt;
+		max_pt.head<3>() = track_bbox_scale * prior_model->bbox.max_pt;
 		// Create the crop box filter and apply it
 		pcl::CropBox<pcl::PointXYZ> crop_filter;
 		crop_filter.setInputCloud(pcl_cloud_model);
@@ -225,8 +237,6 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 			cout << "too few segmented points: " << segmented_indices->size() << endl;
 			continue;
 		}
-		// 分割后点云(model系)
-		pcl::copyPointCloud(*pcl_cloud_model, *segmented_indices, *cloud_segmented_model);
 		// 分割后点云(world系)
 		pcl::copyPointCloud(*pcl_cloud_world, *segmented_indices, *cloud_segmented_world);
 		// 提取剩余点云
@@ -235,91 +245,35 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 		extract.setIndices(segmented_indices);
 		extract.setNegative(true); // 设置为排除索引提供的点云
 		extract.filter(*pcl_cloud_world);
-		// 搜索虚拟点+点云网格配准
-		Eigen::VectorXd sqrD;						// list of squared distances
-		Eigen::VectorXi indices_facets; // list of indices into Element of closest mesh primitive
-		Eigen::MatrixXd closest_points; // list of closest points
-		// ceres ICP
-		for (int i = 1; i <= max_opt_num; i++)
+		double shrink_scale = 1; // bbox收缩因子
+		double final_scale = 0.2;
+		double k = log(final_scale) / static_cast<double>(max_opti_num);
+		Point2meshICP point2mesh_icp; // 点到mesh ICP
+		// point2mesh_icp.setRotCostant(); // 设置旋转不变
+		// 设置最大匹配距离
+		point2mesh_icp.setMaxCorrespondenceDist(max_correspondence_dist);
+		// 设置异常值阈值
+		point2mesh_icp.setOutlierThreshold(0.2);
+		pcl::PointCloud<pcl::PointXYZ>::Ptr mesh_cloud(new pcl::PointCloud<pcl::PointXYZ>); // mesh匹配虚拟点
+		for (int i = 0; i < max_opti_num; i++)
 		{
-			Eigen::MatrixXd query_points(cloud_segmented_model->points.size(), 3); // query_points : list of query points
-			for (int i = 0; i < cloud_segmented_model->points.size(); i++)
-			{
-				query_points(i, 0) = cloud_segmented_model->points[i].x;
-				query_points(i, 1) = cloud_segmented_model->points[i].y;
-				query_points(i, 2) = cloud_segmented_model->points[i].z;
-			}
-			// 更新mesh匹配
-			pcl::PointCloud<pcl::PointXYZ>::Ptr mesh_cloud(new pcl::PointCloud<pcl::PointXYZ>);
-			TicToc t_point_mesh; // 搜索匹配点的时间
-			prior_model->tree_ptr->squared_distance(prior_model->mesh_ptr->vertices, prior_model->mesh_ptr->facets, query_points, sqrD, indices_facets, closest_points);
-			std::cout << "prior_lidar_pts size: " << cloud_segmented_model->points.size() << "\n"
-								<< "point-mesh time (ms): " << t_point_mesh.toc() << std::endl;
-			int meshnum = closest_points.size() / 3; // mesh虚拟点数目
-			for (int i = 0; i < meshnum; i++)
-			{
-				pcl::PointXYZ pointc; // 匹配最近点
-				pointc.x = closest_points(i, 0);
-				pointc.y = closest_points(i, 1);
-				pointc.z = closest_points(i, 2);
-				mesh_cloud->points.push_back(pointc);
-			}
-			double scale_mesh = 1.0 / meshnum; // point-to-mesh权重系数
-			// 构造损失函数
-			double parameter[7] = {0, 0, 0, 1, 0, 0, 0}; // 迭代初值
-			Eigen::Map<Eigen::Quaterniond> q(parameter);
-			Eigen::Map<Eigen::Vector3d> t(parameter + 4);
-			ceres::LossFunction *loss_function = new ceres::HuberLoss(0.1);
-			ceres::LossFunction *loss_function_scaled =
-					new ceres::ScaledLoss(loss_function, scale_mesh, ceres::Ownership::DO_NOT_TAKE_OWNERSHIP);
-			ceres::LocalParameterization *q_parameterization = new ceres::EigenQuaternionParameterization();
-			ceres::Problem::Options problem_options;
-			ceres::Problem problem(problem_options);
-			problem.AddParameterBlock(parameter, 4, q_parameterization); // 添加参数块，旋转四元数
-			problem.AddParameterBlock(parameter + 4, 3);
-			for (int i = 0; i < meshnum; i++)
-			{
-				pcl::PointXYZ &lidarPt = cloud_segmented_model->points[i];
-				pcl::PointXYZ &meshPt = mesh_cloud->points[i];
-				Eigen::Vector3d lidar_pt(lidarPt.x, lidarPt.y, lidarPt.z);
-				Eigen::Vector3d mesh_pt(meshPt.x, meshPt.y, meshPt.z);
-				ceres::CostFunction *cost_function = PointMeshFactor::Create(lidar_pt, mesh_pt);
-				problem.AddResidualBlock(cost_function, loss_function_scaled, parameter, parameter + 4);
-			}
-
-			TicToc t_solver;
-			ceres::Solver::Options options;
-			options.minimizer_type = ceres::TRUST_REGION;
-			options.linear_solver_type = ceres::DENSE_QR;
-			options.max_num_iterations = 4;
-			options.minimizer_progress_to_stdout = false;
-			options.check_gradients = false;
-			options.gradient_check_relative_precision = 1e-4;
-			ceres::Solver::Summary summary;
-			ceres::Solve(options, &problem, &summary);
-			var = summary.final_cost; // 最终函数值
-			// std::cout << summary.BriefReport() << "\n";
-
-			// model在世界系下的位姿
-			Eigen::Affine3d T_inc = Eigen::Affine3d::Identity(); // 位姿增量
-			T_inc.rotate(q);
-			T_inc.pretranslate(t);
-			T_w2m = T_inc * T_w2m; // 更新T_w2m
 			// 更新原始点云world_to_model
 			pcl::transformPointCloud(*cloud_segmented_world, *cloud_segmented_model, T_w2m); // 更新之后的模型系点云
 			// 收缩bounding box
-			min_pt(0) = bbox_scale * prior_model->bbox.min_pt(0);
-			min_pt(1) = bbox_scale * prior_model->bbox.min_pt(1);
-			min_pt(2) = bbox_scale * prior_model->bbox.min_pt(2);
-			max_pt(0) = bbox_scale * prior_model->bbox.max_pt(0);
-			max_pt(1) = bbox_scale * prior_model->bbox.max_pt(1);
-			max_pt(2) = bbox_scale * prior_model->bbox.max_pt(2);
+			min_pt.head<3>() = shrink_scale * track_bbox_scale * prior_model->bbox.min_pt;
+			max_pt.head<3>() = shrink_scale * track_bbox_scale * prior_model->bbox.max_pt;
 			// 重新分割模型点云
 			pcl::CropBox<pcl::PointXYZ> crop_filter;
 			crop_filter.setInputCloud(cloud_segmented_model);
 			crop_filter.setMin(min_pt);
 			crop_filter.setMax(max_pt);
 			crop_filter.filter(*segmented_indices);
+			// 如果分割点云过少，则跳过当前循环
+			if (segmented_indices->size() < segment_num_threshold)
+			{
+				cout << "too few segmented points: " << segmented_indices->size() << endl;
+				break;
+			}
 			// 将分割剩余点云放回pcl_cloud_world供下一个模型提取
 			pcl::PointCloud<pcl::PointXYZ> cloud_add;
 			extract.setInputCloud(cloud_segmented_world);
@@ -338,25 +292,60 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 			extract.setNegative(false); // 设置为提取索引提供的点云
 			extract.filter(*cloud_segmented_world);
 
-			// ICP迭代结束，点云发布
-			std::cout << "ICP update finish" << std::endl;
+			// point-mesh icp
+			if (!point2mesh_icp(cloud_segmented_model, prior_model, mesh_cloud))
+			{
+				// 如果异常点过多，调整缩放因子，再次分割
+				cout << "outlier too much" << endl;
+				// shrink_scale *= 0.9;
+				continue;
+			}
+
+			// 只有当收敛了才会更新
+			if (point2mesh_icp.hasConverged() && point2mesh_icp.getFitness() < fitness_threshold)
+			{
+				// 设置最大匹配距离
+				point2mesh_icp.setMaxCorrespondenceDist(max_correspondence_dist * exp(k * static_cast<double>(i + 1)));
+				Eigen::Affine3d T_inc = point2mesh_icp.getTransform(); // 位姿增量
+				T_w2m = T_inc * T_w2m;																 // 更新T_w2m
+				// ICP迭代结束，点云发布
+				std::cout << "ICP update finish" << std::endl;
+			}
+			// else
+			// {
+			// 	// 如果ICP结果不好，调整，重新ICP
+			// 	shrink_scale *= 0.9;
+			// }
+		}
+		if (point2mesh_icp.hasConverged() && point2mesh_icp.getFitness() < 0.01 * fitness_threshold)
+		{
+			// 发送模型与雷达帧的约束
+			geometry_msgs::PoseWithCovariance msg_constraint;
+			Eigen::Affine3d T_m2b = (T_b2w * T_w2m).inverse(); // model->body约束
+			msg_constraint.pose = Affine3d2poseMsg(T_m2b);
+			msg_constraint.covariance[0] = keypose_idx;									// 关键帧id
+			msg_constraint.covariance[1] = model_idx;										// 模型id
+			msg_constraint.covariance[2] = point2mesh_icp.getFitness(); // 位移协方差
+			msg_constraint.covariance[3] = point2mesh_icp.getFitness(); // 旋转协方差
+			pub_prior_constraint.publish(msg_constraint);
+			// 可视化用的
+			model_pos.push_back(T_w2m.inverse().translation());
+			// 发布模型位姿
+			nav_msgs::Odometry::Ptr msg(new nav_msgs::Odometry);
+			msg->header.stamp = ros::Time::now();
+			msg->header.frame_id = map_frame;
+			msg->child_frame_id = "model";
+			msg->pose.pose = Affine3d2poseMsg(T_w2m.inverse());
+			pub_model_pose.publish(msg);
+		}
+		else
+		{
 			// 分割后的点云（世界坐标系）、迭代前的虚拟点云、迭代后的虚拟点云
 			publishCloud(pub_prior_lidar_pts, cloud_segmented_world, ros::Time::now(), map_frame);
 			// 迭代后的虚拟点云转换会world系发布
 			pcl::transformPointCloud(*mesh_cloud, *mesh_cloud, T_w2m.inverse()); // 更新之后的模型系点云
 			publishCloud(pub_prior_mesh_pts_aligned, mesh_cloud, ros::Time::now(), map_frame);
 		}
-		// 发送模型与雷达帧的约束
-		geometry_msgs::PoseWithCovariance msg_constraint;
-		Eigen::Affine3d T_m2b = (T_b2w * T_w2m).inverse(); // model->body约束
-		msg_constraint.pose = Affine3d2poseMsg(T_m2b);
-		msg_constraint.covariance[0] = keypose_idx; // 关键帧id
-		msg_constraint.covariance[1] = model_idx;		// 模型id
-		msg_constraint.covariance[2] = 0.1 * var;		// 位移协方差
-		msg_constraint.covariance[3] = var;					// 旋转协方差
-		pub_prior_constraint.publish(msg_constraint);
-		// 可视化用的
-		model_pos.push_back(T_w2m.inverse().translation());
 	}
 	// 可视化先验约束
 	if (model_pos.size() > 0)
@@ -400,10 +389,12 @@ bool modelInit(const string &path)
 		std::cerr << errs << std::endl;
 		return false;
 	}
+
+	pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_normal_all(new pcl::PointCloud<pcl::PointXYZINormal>);
 	for (auto &m : root["models"])
 	{
 		std::shared_ptr<Mesh> mesh_ptr(new Mesh);
-		igl::readOBJ(m["path"].asString(), mesh_ptr->vertices, mesh_ptr->facets);
+		igl::read_triangle_mesh(m["path"].asString(), mesh_ptr->vertices, mesh_ptr->facets);
 		std::shared_ptr<PriorModel> model_ptr(new PriorModel(mesh_ptr));
 		Eigen::Affine3d T_m2w;
 		pcl::getTransformation(m["trans"][0].asDouble(), m["trans"][1].asDouble(), m["trans"][2].asDouble(),
@@ -416,6 +407,40 @@ bool modelInit(const string &path)
 		model_ptr->bbox.max_pt << m["max_pt"][0].asDouble(), m["max_pt"][1].asDouble(), m["max_pt"][2].asDouble();
 		model_pos_cloud->push_back(pcl::PointXYZ(model_ptr->bbox.trans(0), model_ptr->bbox.trans(1), model_ptr->bbox.trans(2)));
 		prior_models.push_back(model_ptr);
+		// mesh to point cloud with normal vector
+		Eigen::MatrixXd N_faces;
+		// Compute per-face normals
+		igl::per_face_normals(mesh_ptr->vertices, mesh_ptr->facets, N_faces);
+		pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_normal(new pcl::PointCloud<pcl::PointXYZINormal>);
+		for (int i = 0; i < mesh_ptr->facets.rows(); i++)
+		{
+			Eigen::Vector3d vertex0 = mesh_ptr->vertices.row(mesh_ptr->facets(i, 0)); // 顶点1
+			Eigen::Vector3d vertex1 = mesh_ptr->vertices.row(mesh_ptr->facets(i, 1)); // 顶点2
+			Eigen::Vector3d vertex2 = mesh_ptr->vertices.row(mesh_ptr->facets(i, 2)); // 顶点3
+			// 法向量
+			Eigen::Vector3d normal = (vertex1 - vertex0).cross((vertex2 - vertex0));
+			normal.normalize();
+			// 中心点
+			Eigen::Vector3d centroid = (vertex0 + vertex1 + vertex2) / 3.0;
+			pcl::PointXYZINormal point_normal;
+			point_normal.x = centroid(0);
+			point_normal.y = centroid(1);
+			point_normal.z = centroid(2);
+			point_normal.normal_x = normal(0);
+			point_normal.normal_y = normal(1);
+			point_normal.normal_z = normal(2);
+
+			cloud_normal->push_back(point_normal);
+		}
+		pcl::transformPointCloudWithNormals(*cloud_normal, *cloud_normal, T_m2w.matrix());
+		*cloud_normal_all += *cloud_normal;
+		cout << "cloud_normal.size : " << cloud_normal->size() << endl;
+	}
+	ros::Rate rate(10);
+	while (ros::ok())
+	{
+		rate.sleep();
+		publishCloud(pub_model_cloud_normal, cloud_normal_all, ros::Time::now(), map_frame);
 	}
 	return true;
 }
@@ -426,12 +451,16 @@ int main(int argc, char **argv)
 	ros::MultiThreadedSpinner spinner(2);
 	ROS_INFO("\033[1;31m **********Point-Mesh Thread Started********** \033[0m");
 	string json_path = ros::package::getPath("ref_provider") + "/config/params.json";
-	if (!modelInit(json_path))
-		std::cerr << "model init error" << std::endl;
-	nh.param<double>("ref_provider/bbox_scale", bbox_scale, 1.0);
+	std::thread m_init(modelInit, json_path);
+	sleep(3);
+	// if (!modelInit(json_path))
+	// 	std::cerr << "model init error" << std::endl;
+	nh.param<double>("ref_provider/track_bbox_scale", track_bbox_scale, 1.0);
 	nh.param<int>("ref_provider/segment_num_threshold", segment_num_threshold, 500);
-	nh.param<int>("ref_provider/max_opt_num", max_opt_num, 2);
+	nh.param<int>("ref_provider/max_opti_num", max_opti_num, 5);
 	nh.param<float>("ref_provider/search_radius", search_radius, 100.0);
+	nh.param<double>("ref_provider/fitness_threshold", fitness_threshold, 0.02);
+	nh.param<double>("ref_provider/max_correspondence_dist", max_correspondence_dist, 1);
 	nh.param<string>("ref_provider/map_frame", map_frame, "map");
 	nh.param<string>("ref_provider/point_cloud_topic", point_cloud_topic, "submap");
 	nh.param<string>("ref_provider/aftPgo_odom_topic", aftPgo_odom_topic, "aftPgo_odom");
@@ -454,7 +483,10 @@ int main(int argc, char **argv)
 	pub_prior_mesh_pts_origin = nh.advertise<sensor_msgs::PointCloud2>("prior_mesh_pts_origin", 1000);
 	ground_truthpub = nh.advertise<nav_msgs::Path>("ground_truth", 10, true);
 	pub_prior_constraint_edge = nh.advertise<visualization_msgs::MarkerArray>("prior_constraints_marker", 1000);
+	pub_model_pose = nh.advertise<nav_msgs::Odometry>("prior_model_pose", 1000);
+	pub_model_cloud_normal = nh.advertise<sensor_msgs::PointCloud2>("prior_mesh_cloud_normal", 1000);
 
 	spinner.spin();
+	m_init.join();
 	return 0;
 }
