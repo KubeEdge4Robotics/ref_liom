@@ -1,25 +1,10 @@
 #include "common.h"
-// PCL 的相关的头文件
-#include <pcl/io/pcd_io.h>
-#include <pcl/io/obj_io.h>
-#include <pcl/io/io.h>
-#include <pcl/visualization/cloud_viewer.h>
-#include <pcl/registration/icp.h>
-#include <pcl/registration/icp_nl.h>
-#include <pcl/io/vtk_lib_io.h>
-#include <pcl/kdtree/kdtree_flann.h>
-// 滤波的头文件
-#include <pcl/filters/voxel_grid.h>
-#include <pcl/filters/passthrough.h>
-#include <pcl/filters/crop_box.h>										 //分割bounding box头文件
-#include <pcl/filters/statistical_outlier_removal.h> //统计滤波 头文件
-#include <pcl/filters/radius_outlier_removal.h>
-#include <pcl/filters/conditional_removal.h>
-#include <pcl/filters/extract_indices.h>
+#include "pcl_utils.hpp"
 #include <ros/package.h>
 #include <json/json.h>
 #include <igl/read_triangle_mesh.h>
 #include <igl/per_face_normals.h>
+#include <igl/random_points_on_mesh.h>
 using namespace std;
 
 ros::Publisher pub_prior_constraint;
@@ -28,6 +13,7 @@ ros::Publisher pub_prior_mesh_pts_aligned;
 ros::Publisher pub_prior_mesh_pts_origin;
 ros::Publisher pub_prior_constraint_edge;
 ros::Publisher pub_model_cloud_normal;
+ros::Publisher pub_ground_cloud;
 
 nav_msgs::Path path;
 ros::Publisher ground_truthpub;
@@ -182,7 +168,6 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 	ROS_INFO("\033[1;31m xxxxsyncedCallbackStart, %f  \033[0m", ros::Time::now().toSec());
 	// 可视化用的
 	std::vector<Eigen::Vector3d> model_pos;
-
 	// PCL
 	pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud_body(new pcl::PointCloud<pcl::PointXYZ>); // pcl_cloud_msg要转化成的点云
 	pcl::PointCloud<pcl::PointXYZ>::Ptr pcl_cloud_world(new pcl::PointCloud<pcl::PointXYZ>);
@@ -193,10 +178,31 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 	uint32_t keypose_idx = msg_cloud->header.seq;																									 // 关键帧id
 	// 转化：ROS 点云 -> PCL
 	pcl::fromROSMsg(*msg_cloud, *pcl_cloud_body);
+	pcl::IndicesPtr indices_plane(new pcl::Indices);
+	// 分割剔除地面点
+	segmentPlane(pcl_cloud_body, *indices_plane);
+	pcl::PointCloud<pcl::PointXYZ>::Ptr ground_points(new pcl::PointCloud<pcl::PointXYZ>);
+	// 提取非平面点云
+	pcl::ExtractIndices<pcl::PointXYZ> extract;
+	//提取平面点
+	extract.setInputCloud(pcl_cloud_body);
+	extract.setIndices(indices_plane);
+	extract.setNegative(false); // 设置为剔除索引提供的点云
+	extract.filter(*ground_points);
+	//提取非平面点
+	extract.setInputCloud(pcl_cloud_body);
+	extract.setIndices(indices_plane);
+	extract.setNegative(true); // 设置为剔除索引提供的点云
+	extract.filter(*pcl_cloud_body);
+	// 发布地面点云
+	publishCloud(pub_ground_cloud, ground_points, ros::Time::now(), map_frame);
 	// 坐标转换body_to_world
 	Eigen::Affine3d T_b2w = poseMsg2Affine3d(msg_odom->pose.pose);
 	pcl::transformPointCloud(*pcl_cloud_body, *pcl_cloud_world, T_b2w.matrix());
 	pcl_cloud_body.reset();
+
+	// 估计法向量
+	pcl::PointCloud<pcl::Normal>::Ptr cloud_world_normals = computeNormals<pcl::PointXYZ>(pcl_cloud_world, 2.0);
 
 	std::vector<int> pointIdxRadiusSearch;
 	std::vector<float> pointRadiusSquaredDistance;
@@ -250,7 +256,7 @@ void syncedCallback(const nav_msgs::Odometry::ConstPtr &msg_odom, const sensor_m
 		double k = log(final_scale) / static_cast<double>(max_opti_num);
 		Point2meshICP point2mesh_icp; // 点到mesh ICP
 		// point2mesh_icp.setRotCostant(); // 设置旋转不变
-		// 设置最大匹配距离
+		// 设置最大匹配距离random_points_on_mesh
 		point2mesh_icp.setMaxCorrespondenceDist(max_correspondence_dist);
 		// 设置异常值阈值
 		point2mesh_icp.setOutlierThreshold(0.2);
@@ -389,7 +395,7 @@ bool modelInit(const string &path)
 		std::cerr << errs << std::endl;
 		return false;
 	}
-
+	TicToc t_model_init; // 模型初始化的时间
 	pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_normal_all(new pcl::PointCloud<pcl::PointXYZINormal>);
 	for (auto &m : root["models"])
 	{
@@ -408,18 +414,60 @@ bool modelInit(const string &path)
 		model_pos_cloud->push_back(pcl::PointXYZ(model_ptr->bbox.trans(0), model_ptr->bbox.trans(1), model_ptr->bbox.trans(2)));
 		prior_models.push_back(model_ptr);
 		// mesh to point cloud with normal vector
-		Eigen::MatrixXd N_faces;
-		// Compute per-face normals
-		igl::per_face_normals(mesh_ptr->vertices, mesh_ptr->facets, N_faces);
 		pcl::PointCloud<pcl::PointXYZINormal>::Ptr cloud_normal(new pcl::PointCloud<pcl::PointXYZINormal>);
-		for (int i = 0; i < mesh_ptr->facets.rows(); i++)
+		{ // add vertex
+			Eigen::MatrixXd N_vertices;
+			// Compute per-vertex normals
+			igl::per_vertex_normals(mesh_ptr->vertices, mesh_ptr->facets, N_vertices);
+			for (int i = 0; i < N_vertices.rows(); i++)
+			{
+				pcl::PointXYZINormal point_normal;
+				point_normal.x = mesh_ptr->vertices(i, 0);
+				point_normal.y = mesh_ptr->vertices(i, 1);
+				point_normal.z = mesh_ptr->vertices(i, 2);
+				point_normal.normal_x = N_vertices(i, 0);
+				point_normal.normal_y = N_vertices(i, 1);
+				point_normal.normal_z = N_vertices(i, 2);
+				cloud_normal->push_back(point_normal);
+			}
+		}
+		{ // samping on facets
+			Eigen::MatrixXd N_faces;
+			// Compute per-face normals
+			igl::per_face_normals(mesh_ptr->vertices, mesh_ptr->facets, N_faces);
+			Eigen::MatrixXd barycentric_coord;
+			Eigen::VectorXi F_index;
+			igl::random_points_on_mesh(5000, mesh_ptr->vertices, mesh_ptr->facets, barycentric_coord, F_index);
+			for (int i = 0; i < F_index.size(); i++)
+			{
+				Eigen::Vector3i vertex_indices = mesh_ptr->facets.row(F_index(i));	 // 面片点索引
+				Eigen::Vector3d vertex0 = mesh_ptr->vertices.row(vertex_indices(0)); // 顶点1
+				Eigen::Vector3d vertex1 = mesh_ptr->vertices.row(vertex_indices(1)); // 顶点2
+				Eigen::Vector3d vertex2 = mesh_ptr->vertices.row(vertex_indices(2)); // 顶点3
+				// 采样点
+				Eigen::Vector3d vertex = barycentric_coord(i, 0) * vertex0 +
+																 barycentric_coord(i, 1) * vertex1 +
+																 barycentric_coord(i, 2) * vertex2;
+				// 法向量
+				Eigen::Vector3d normal = N_faces.row(F_index(i));
+
+				pcl::PointXYZINormal point_normal;
+				point_normal.x = vertex(0);
+				point_normal.y = vertex(1);
+				point_normal.z = vertex(2);
+				point_normal.normal_x = normal(0);
+				point_normal.normal_y = normal(1);
+				point_normal.normal_z = normal(2);
+				cloud_normal->push_back(point_normal);
+			}
+		}
+		/* for (int i = 0; i < mesh_ptr->facets.rows(); i++)
 		{
 			Eigen::Vector3d vertex0 = mesh_ptr->vertices.row(mesh_ptr->facets(i, 0)); // 顶点1
 			Eigen::Vector3d vertex1 = mesh_ptr->vertices.row(mesh_ptr->facets(i, 1)); // 顶点2
 			Eigen::Vector3d vertex2 = mesh_ptr->vertices.row(mesh_ptr->facets(i, 2)); // 顶点3
 			// 法向量
-			Eigen::Vector3d normal = (vertex1 - vertex0).cross((vertex2 - vertex0));
-			normal.normalize();
+			Eigen::Vector3d normal = N_faces.row(i);
 			// 中心点
 			Eigen::Vector3d centroid = (vertex0 + vertex1 + vertex2) / 3.0;
 			pcl::PointXYZINormal point_normal;
@@ -429,13 +477,26 @@ bool modelInit(const string &path)
 			point_normal.normal_x = normal(0);
 			point_normal.normal_y = normal(1);
 			point_normal.normal_z = normal(2);
-
 			cloud_normal->push_back(point_normal);
-		}
-		pcl::transformPointCloudWithNormals(*cloud_normal, *cloud_normal, T_m2w.matrix());
+		} */
+
+		// pcl::transformPointCloudWithNormals(*cloud_normal, *cloud_normal, T_m2w.matrix());
 		*cloud_normal_all += *cloud_normal;
 		cout << "cloud_normal.size : " << cloud_normal->size() << endl;
 	}
+	double voxel_grid_size = 0.1;
+	// VoxelGrid Filter
+	//  pcl::VoxelGrid<pcl::PointXYZINormal> downSizeFilterMap;
+	//  downSizeFilterMap.setLeafSize(voxel_grid_size, voxel_grid_size, voxel_grid_size);
+	//  downSizeFilterMap.setInputCloud(cloud_normal_all);
+	//  downSizeFilterMap.filter(*cloud_normal_all);
+	// UniformSampling
+	pcl::UniformSampling<pcl::PointXYZINormal> uniform_sampling; // 下采样滤波模型
+	uniform_sampling.setInputCloud(cloud_normal_all);						 // 模型点云
+	uniform_sampling.setRadiusSearch(voxel_grid_size);					 // 模型点云下采样滤波搜索半径
+	uniform_sampling.filter(*cloud_normal_all);									 // 下采样得到的关键点
+	cout << "dowmsamping cloud_normal.size : " << cloud_normal_all->size() << endl;
+	cout << "models have inited. cost time(ms):" << t_model_init.toc() << endl;
 	ros::Rate rate(10);
 	while (ros::ok())
 	{
@@ -451,8 +512,7 @@ int main(int argc, char **argv)
 	ros::MultiThreadedSpinner spinner(2);
 	ROS_INFO("\033[1;31m **********Point-Mesh Thread Started********** \033[0m");
 	string json_path = ros::package::getPath("ref_provider") + "/config/params.json";
-	std::thread m_init(modelInit, json_path);
-	sleep(3);
+	std::thread m_init(modelInit, json_path); 
 	// if (!modelInit(json_path))
 	// 	std::cerr << "model init error" << std::endl;
 	nh.param<double>("ref_provider/track_bbox_scale", track_bbox_scale, 1.0);
@@ -485,7 +545,9 @@ int main(int argc, char **argv)
 	pub_prior_constraint_edge = nh.advertise<visualization_msgs::MarkerArray>("prior_constraints_marker", 1000);
 	pub_model_pose = nh.advertise<nav_msgs::Odometry>("prior_model_pose", 1000);
 	pub_model_cloud_normal = nh.advertise<sensor_msgs::PointCloud2>("prior_mesh_cloud_normal", 1000);
-
+	pub_ground_cloud = nh.advertise<sensor_msgs::PointCloud2>("ground_plane_cloud", 1000);
+	
+	sleep(3);
 	spinner.spin();
 	m_init.join();
 	return 0;

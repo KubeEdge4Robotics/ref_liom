@@ -42,12 +42,12 @@ ref_liom:
 
   # Loop closure
   loopClosureEnableFlag: true
-  loopClosureFrequency: 0.2                     # Hz, regulate loop closure constraint add frequency
-  surroundingKeyframeSize: 5                    # submap size (when loop closure enabled)
-  historyKeyframeSearchRadius: 10.0             # meters, key frame that is within n meters from current pose will be considerd for loop closure
-  historyKeyframeSearchTimeDiff: 30.0           # seconds, key frame that is n seconds older will be considered for loop closure
-  historyKeyframeSearchNum: 5                   # number of hostory key frames will be fused into a submap for loop closure
-  historyKeyframeFitnessScore: 0.02             # icp threshold, the smaller the better alignment
+  loopClosureFrequency: 0.5                    # Hz, regulate loop closure constraint add frequency
+  surroundingKeyframeSize: 50                  # submap size (when loop closure enabled)
+  historyKeyframeSearchRadius: 15.0            # meters, key frame that is within n meters from current pose will be considerd for loop closure
+  historyKeyframeSearchTimeDiff: 30.0          # seconds, key frame that is n seconds older will be considered for loop closure
+  historyKeyframeSearchNum: 25                 # number of hostory key frames will be fused into a submap for loop closure
+  historyKeyframeFitnessScore: 0.2             # icp threshold, the smaller the better alignment
 
   # Visualization
   globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius

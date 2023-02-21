@@ -211,6 +211,19 @@ sensor_msgs::PointCloud2::Ptr publishCloud(const ros::Publisher &thisPub, const 
 }
 
 template <typename T>
+sensor_msgs::PointCloud2::Ptr publishCloud(const ros::Publisher &thisPub, const T &thisCloud, const ros::Time &thisStamp, const std::string &thisFrame, uint32_t seq)
+{
+	sensor_msgs::PointCloud2::Ptr tempCloud(new sensor_msgs::PointCloud2);
+	pcl::toROSMsg(*thisCloud, *tempCloud);
+	tempCloud->header.seq = seq; // 序列号
+	tempCloud->header.stamp = thisStamp;
+	tempCloud->header.frame_id = thisFrame;
+	if (thisPub.getNumSubscribers() != 0)
+		thisPub.publish(tempCloud);
+	return tempCloud;
+}
+
+template <typename T>
 double ROS_TIME(T msg)
 {
 	return msg->header.stamp.toSec();

@@ -37,6 +37,7 @@
 // std头文件
 #include <cmath>
 #include <vector>
+#include <list>
 #include <iostream>
 #include <mutex>
 #include <queue>
@@ -46,6 +47,7 @@
 #include <Eigen/Eigen>
 // ros头文件
 #include <ros/ros.h>
+#include <pcl_conversions/pcl_conversions.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <nav_msgs/Path.h>
 #include <nav_msgs/Odometry.h>
@@ -61,12 +63,6 @@
 // pcl 头文件
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
-#include <pcl_conversions/pcl_conversions.h>
-#include <pcl/common/common.h>
-#include <pcl/common/transforms.h>
-#include <pcl/common/pca.h>
-#include <pcl/common/eigen.h>
-#include <pcl/common/io.h>
 // ceres 相关头文件
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
@@ -150,6 +146,7 @@ inline double deg2rad(double degrees)
 {
 	return degrees * M_PI / 180.0;
 }
+
 template <typename T>
 sensor_msgs::PointCloud2::Ptr publishCloud(const ros::Publisher &thisPub, const T &thisCloud, const ros::Time &thisStamp, const std::string &thisFrame)
 {

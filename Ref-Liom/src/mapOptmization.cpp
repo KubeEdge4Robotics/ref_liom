@@ -886,14 +886,19 @@ public:
 		while (!refQueue.empty())
 		{
 			geometry_msgs::PoseWithCovariance &refMsg = refQueue.front();
-			gtsam::Pose3 poseBetween = poseMsg2gtsamPose(refMsg.pose);					// model->body
+			gtsam::Pose3 poseBetween = poseMsg2gtsamPose(refMsg.pose);				 // model->body
 			uint32_t keyposeIdx = static_cast<uint32_t>(refMsg.covariance[0]); // 关键帧id
-			int modelIdx = static_cast<int>(refMsg.covariance[1]);							// 模型id
-			gtsam::Pose3 poseFrom = keyPoses6D[keyposeIdx].pose;								// 关键帧位姿
+			int modelIdx = static_cast<int>(refMsg.covariance[1]);						 // 模型id
+			gtsam::Pose3 poseFrom = keyPoses6D[keyposeIdx].pose;							 // 关键帧位姿
 			gtsam::Pose3 poseTo = poseFrom * poseBetween;
-			double var_trans = 1000 * refMsg.covariance[2];	 // 位移协方差
-			double var_rot = 10000 * refMsg.covariance[3]; // 旋转协方差
+			double var_trans = 1000 * refMsg.covariance[2]; // 位移协方差
+			double var_rot = 10000 * refMsg.covariance[3];	// 旋转协方差
 			cout << "var_trans: " << var_trans << "var_rot:" << var_rot << endl;
+			noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(var_trans), Vector3::Constant(var_rot)).finished());
+			noiseModel::Base::shared_ptr robustConstraintNoise = gtsam::noiseModel::Robust::Create(
+					gtsam::noiseModel::mEstimator::Cauchy::Create(1), // optional: replacing Cauchy by DCS or GemanMcClure, but with a good front-end loop detector, Cauchy is empirically enough.
+					refNoise);																				// - checked it works. but with robust kernel, map modification may be delayed (i.e,. requires more true-positive loop factors)
+
 			// If this is the first iteration, add a prior on the first pose to set the
 			// coordinate frame and a prior on the first landmark to set the scale Also,
 			// as iSAM solves incrementally, we must wait until each is observed at
@@ -903,34 +908,31 @@ public:
 				if (modelInfoSet.count(modelIdx) == 0)
 				{
 					modelInfoSet.emplace(modelIdx, std::make_shared<FactorsWithValues>());
-					(modelInfoSet[modelIdx]->values).insert(M(modelIdx), poseTo);																																														 // 加入初值
+					(modelInfoSet[modelIdx]->values).insert(M(modelIdx), poseTo);																																															 // 加入初值
 					noiseModel::Diagonal::shared_ptr priorNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(1e-2), Vector3::Constant(1e-2)).finished()); // rad*rad, meter*meter
-					noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(var_trans), Vector3::Constant(var_rot)).finished());
 					(modelInfoSet[modelIdx]->factors).push_back(gtsam::NonlinearFactor::shared_ptr(new PriorFactor<Pose3>(M(modelIdx), poseTo, priorNoise)));
-					(modelInfoSet[modelIdx]->factors).push_back(BetweenFactor<Pose3>::shared_ptr(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, refNoise)));
+					(modelInfoSet[modelIdx]->factors).push_back(BetweenFactor<Pose3>::shared_ptr(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, robustConstraintNoise)));
 				}
 				else
 				{
-					noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(var_trans), Vector3::Constant(var_rot)).finished());
-					BetweenFactor<Pose3>::shared_ptr refFactor(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, refNoise));
-					(modelInfoSet[modelIdx]->factors).push_back(refFactor);// 加入模型因子
-					if (modelInfoSet[modelIdx]->factors.size() > minModelFactorNum){
+					BetweenFactor<Pose3>::shared_ptr refFactor(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, robustConstraintNoise));
+					(modelInfoSet[modelIdx]->factors).push_back(refFactor); // 加入模型因子
+					if (modelInfoSet[modelIdx]->factors.size() > minModelFactorNum)
+					{
 						initialEstimate.insert(modelInfoSet[modelIdx]->values);
 						gtSAMgraph.add_factors(modelInfoSet[modelIdx]->factors);
-						modelInfoSet.erase(modelIdx);//删除模型因子与初值信息
+						modelInfoSet.erase(modelIdx); // 删除模型因子与初值信息
 						modelReady.emplace(modelIdx);
 						aLoopIsClosed = true;
-					}			
+					}
 				}
 			}
 			else
 			{
-				noiseModel::Diagonal::shared_ptr refNoise = noiseModel::Diagonal::Variances((Vector(6) << Vector3::Constant(var_trans), Vector3::Constant(var_rot)).finished());
 				BetweenFactor<Pose3>::shared_ptr refFactor(new BetweenFactor<Pose3>(X(keyposeIdx), M(modelIdx), poseBetween, refNoise));
 				gtSAMgraph.add(refFactor); // 加入模型因子
 				aLoopIsClosed = true;
 			}
-
 			refQueue.pop_front();
 		}
 	}
@@ -1001,7 +1003,6 @@ public:
 		// 积累n个关键帧作为一个子图
 		if (subframe_idx == 1)
 		{
-			// if(subframe_idx < submap_frame_num){
 			submap_start_idx = keyPoses3D->size() - 1;
 			hash_submap[submap_idx] = std::make_shared<Submap>();
 			hash_submap[submap_idx]->keyCloudIndices.push_back(keyPoses3D->size() - 1); // 累积点云索引
@@ -1024,7 +1025,7 @@ public:
 				// 将关键帧点云都投影到最后一帧的坐标系中
 				*submap_cloud += *transformPointCloud(keyClouds[i], keyPoses6D[submap_end_idx].pose.inverse() * keyPoses6D[i].pose);
 			}
-			publishCloud(pubSubmap, submap_cloud, ros::Time(keyPoses6D[submap_end_idx].time), bodyFrame); // 发送子图点云
+			publishCloud(pubSubmap, submap_cloud, ros::Time(keyPoses6D[submap_end_idx].time), bodyFrame, submap_end_idx); // 发送子图点云
 			// 为下一子图做准备
 			submap_idx++;			// 子图索引+1
 			subframe_idx = 0; // 子图内关键帧索引归零
