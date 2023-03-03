@@ -13,7 +13,7 @@ ref_liom:
   mapFrame: "map"
   
   # submap
-  submapFrameNum: 2
+  submapFrameNum: 5
 
   # GPS Settings
   useGpsElevation: false                      # if GPS elevation is bad, set to "false"
@@ -32,16 +32,16 @@ ref_liom:
   
   # CPU Params
   numberOfCores: 8                            # number of cores for mapping optimization
-  mappingProcessInterval: 0.2                 # seconds, regulate mapping frequency
+  mappingProcessInterval: 0.1                 # seconds, regulate mapping frequency
   
   # Surrounding map
-  surroundingkeyframeAddingDistThreshold: 1.0   # meters, regulate keyframe adding threshold
-  surroundingkeyframeAddingAngleThreshold: 0.2  # radians, regulate keyframe adding threshold
+  surroundingkeyframeAddingDistThreshold: 0.2   # meters, regulate keyframe adding threshold
+  surroundingkeyframeAddingAngleThreshold: 0.05  # radians, regulate keyframe adding threshold
   surroundingKeyframeDensity: 2.0               # meters, downsample surrounding keyframe poses   
   surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization (when loop closure disabled)
 
   # Loop closure
-  loopClosureEnableFlag: true
+  loopClosureEnableFlag: false
   loopClosureFrequency: 0.5                    # Hz, regulate loop closure constraint add frequency
   surroundingKeyframeSize: 50                  # submap size (when loop closure enabled)
   historyKeyframeSearchRadius: 15.0            # meters, key frame that is within n meters from current pose will be considerd for loop closure
@@ -56,15 +56,19 @@ ref_liom:
 
 ref_provider:
   map_frame: "map"
+  body_frame: "body"
   point_cloud_topic: "/ref_liom/submap" 
-  aftPgo_odom_topic: "/ref_liom/aftPgo_odom"
+  odometry_topic: "/ref_liom/aftPgo_odom"
+  keyframe_idx_topic: "/ref_liom/submap_key_idx"
   model_poses_topic: "/ref_liom/model_poses"
-  search_radius: 100.0
-  track_bbox_scale: 1.2
-  segment_num_threshold: 200
-  max_opti_num: 10
+  search_radius: 50.0
+  track_bbox_scale: 1
+  segment_num_threshold: 300
+  max_opti_num: 30
+  max_correspondence_dist: 1
   fitness_threshold: 0.1
-  max_correspondence_dist: 10
+  overlap_threshold: 0.25
+  voxel_size: 0.3
 
 # Navsat (convert GPS coordinates to Cartesian)
 navsat:

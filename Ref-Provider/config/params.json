@@ -1,9 +1,20 @@
 {
-    "models": [{
-        "path": "/home/long/Code/RLOAM/models/Z205.obj",
-        "trans": [-1.708950, 3.5, 3.3],
-        "rot": [0, 0, 0],
-        "min_pt": [-10, -3, -2],
-        "max_pt": [10, 3, 3]
-    }]
+    "models": [
+        // {
+        //       "name": "spheroid",
+        //       "path": "/home/long/Code/rosbag/models/Z205.obj",
+        //       "trans": [-1.70895, 3.5, 2.5],
+        //       "rot": [0, 0, 0],
+        //       "min_pt": [-10, -3, -2],
+        //       "max_pt": [10, 3, 3]
+        //   },
+        {
+            "name": "office_chair",
+            "path": "/home/long/Code/rosbag/models/office_chair.obj",
+            "trans": [6.35256, 9.881950, -0.5],
+            "rot": [1.577529, 0.018758, -0.604883],
+            "min_pt": [-2, -2, -2],
+            "max_pt": [2, 2, 2]
+        }
+    ]
 }

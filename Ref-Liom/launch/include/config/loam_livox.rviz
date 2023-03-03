@@ -5,26 +5,15 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
-        - /Grid1
         - /Grid1/Offset1
-        - /fastlio1
         - /fastlio1/cloud_registered_world1/Autocompute Value Bounds1
-        - /fastlio1/Odometry1
         - /fastlio1/Odometry1/Shape1
         - /TF1/Frames1
         - /ref_liom1
-        - /ref_liom1/Odometry1
         - /ref_liom1/Odometry1/Shape1
-        - /ref_liom1/MarkerArray1
-        - /ref_liom1/submap1
-        - /ref_liom1/global_map1
         - /ref_provider1
-        - /ref_provider1/prior_lidar_pts1
-        - /ref_provider1/mesh_pts_aligned1
         - /ref_provider1/prior_model_pose1/Shape1
-        - /ref_provider1/prior_mesh_cloud_normal1
         - /ground_truth1/Shape1
-        - /ground_plane1
       Splitter Ratio: 0.6432291865348816
     Tree Height: 596
   - Class: rviz/Selection
@@ -115,7 +104,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 1000
-          Enabled: true
+          Enabled: false
           Invert Rainbow: true
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -130,7 +119,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -333,13 +322,13 @@ Visualization Manager:
         - Alpha: 1
           Buffer Length: 1
           Class: rviz/Path
-          Color: 25; 255; 0
+          Color: 252; 233; 79
           Enabled: true
           Head Diameter: 0.30000001192092896
           Head Length: 0.20000000298023224
           Length: 0.30000001192092896
           Line Style: Billboards
-          Line Width: 0.019999999552965164
+          Line Width: 0.15000000596046448
           Name: Path
           Offset:
             X: 0
@@ -365,27 +354,27 @@ Visualization Manager:
         - Alpha: 1
           Buffer Length: 1
           Class: rviz/Path
-          Color: 25; 255; 0
-          Enabled: false
+          Color: 114; 159; 207
+          Enabled: true
           Head Diameter: 0.30000001192092896
           Head Length: 0.20000000298023224
-          Length: 0.30000001192092896
+          Length: 2
           Line Style: Lines
           Line Width: 0.029999999329447746
-          Name: Path
+          Name: model_poses
           Offset:
             X: 0
             Y: 0
             Z: 0
           Pose Color: 255; 85; 255
-          Pose Style: None
+          Pose Style: Axes
           Queue Size: 10
-          Radius: 0.029999999329447746
+          Radius: 0.5
           Shaft Diameter: 0.10000000149011612
           Shaft Length: 0.10000000149011612
           Topic: /ref_liom/model_poses
           Unreliable: false
-          Value: false
+          Value: true
         - Alpha: 0.699999988079071
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -396,7 +385,7 @@ Visualization Manager:
           Channel Name: intensity
           Class: rviz/PointCloud2
           Color: 255; 255; 255
-          Color Transformer: Intensity
+          Color Transformer: FlatColor
           Decay Time: 100000
           Enabled: false
           Invert Rainbow: false
@@ -414,7 +403,7 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: true
           Value: false
-        - Alpha: 1
+        - Alpha: 0.6000000238418579
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 10
@@ -423,8 +412,8 @@ Visualization Manager:
           Axis: Z
           Channel Name: intensity
           Class: rviz/PointCloud2
-          Color: 255; 255; 255
-          Color Transformer: Intensity
+          Color: 215; 100; 169
+          Color Transformer: FlatColor
           Decay Time: 0
           Enabled: true
           Invert Rainbow: false
@@ -435,8 +424,8 @@ Visualization Manager:
           Queue Size: 10
           Selectable: true
           Size (Pixels): 3
-          Size (m): 0.019999999552965164
-          Style: Flat Squares
+          Size (m): 0.05000000074505806
+          Style: Points
           Topic: /ref_liom/global_map
           Unreliable: false
           Use Fixed Frame: true
@@ -446,6 +435,34 @@ Visualization Manager:
       Name: ref_liom
     - Class: rviz/Group
       Displays:
+        - Alpha: 0.20000000298023224
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 231; 30; 238
+          Color Transformer: FlatColor
+          Decay Time: 0
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: prior_tracking_bbox
+          Position Transformer: XYZ
+          Queue Size: 10000
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.10000000149011612
+          Style: Flat Squares
+          Topic: prior_tracking_bbox
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -502,40 +519,13 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: false
           Value: true
-        - Alpha: 1
-          Autocompute Intensity Bounds: true
-          Autocompute Value Bounds:
-            Max Value: 10
-            Min Value: -10
-            Value: true
-          Axis: Z
-          Channel Name: intensity
-          Class: rviz/PointCloud2
-          Color: 255; 255; 255
-          Color Transformer: ""
-          Decay Time: 10000
-          Enabled: false
-          Invert Rainbow: false
-          Max Color: 255; 255; 255
-          Min Color: 0; 0; 0
-          Name: mesh_pts_origin
-          Position Transformer: ""
-          Queue Size: 10000
-          Selectable: true
-          Size (Pixels): 3
-          Size (m): 0.009999999776482582
-          Style: Flat Squares
-          Topic: /prior_mesh_pts_origin
-          Unreliable: false
-          Use Fixed Frame: true
-          Use rainbow: true
-          Value: false
         - Class: rviz/MarkerArray
           Enabled: true
           Marker Topic: /prior_constraints_marker
           Name: prior_constraint
           Namespaces:
-            {}
+            prior_edges: true
+            prior_nodes: true
           Queue Size: 10000
           Value: true
         - Angle Tolerance: 0.10000000149011612
@@ -573,7 +563,7 @@ Visualization Manager:
           Topic: /prior_model_pose
           Unreliable: false
           Value: true
-        - Alpha: 1
+        - Alpha: 0.699999988079071
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 10
@@ -582,7 +572,7 @@ Visualization Manager:
           Axis: Z
           Channel Name: normal_z
           Class: rviz/PointCloud2
-          Color: 0; 255; 0
+          Color: 114; 159; 207
           Color Transformer: FlatColor
           Decay Time: 0
           Enabled: true
@@ -597,6 +587,34 @@ Visualization Manager:
           Size (m): 0.019999999552965164
           Style: Flat Squares
           Topic: /prior_mesh_cloud_normal
+          Unreliable: false
+          Use Fixed Frame: true
+          Use rainbow: true
+          Value: true
+        - Alpha: 0.30000001192092896
+          Autocompute Intensity Bounds: true
+          Autocompute Value Bounds:
+            Max Value: 10
+            Min Value: -10
+            Value: true
+          Axis: Z
+          Channel Name: intensity
+          Class: rviz/PointCloud2
+          Color: 218; 202; 112
+          Color Transformer: FlatColor
+          Decay Time: 100000
+          Enabled: true
+          Invert Rainbow: false
+          Max Color: 255; 255; 255
+          Min Color: 0; 0; 0
+          Name: ground_plane
+          Position Transformer: XYZ
+          Queue Size: 10
+          Selectable: true
+          Size (Pixels): 3
+          Size (m): 0.009999999776482582
+          Style: Flat Squares
+          Topic: /ground_plane_cloud
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
@@ -638,43 +656,6 @@ Visualization Manager:
       Topic: /base_pose_ground_truth
       Unreliable: false
       Value: true
-    - Alpha: 1
-      Class: rviz/Axes
-      Enabled: true
-      Length: 1
-      Name: Axes
-      Radius: 0.10000000149011612
-      Reference Frame: <Fixed Frame>
-      Show Trail: false
-      Value: true
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz/PointCloud2
-      Color: 255; 255; 255
-      Color Transformer: ""
-      Decay Time: 100000
-      Enabled: true
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Min Color: 0; 0; 0
-      Name: ground_plane
-      Position Transformer: ""
-      Queue Size: 10
-      Selectable: true
-      Size (Pixels): 3
-      Size (m): 0.10000000149011612
-      Style: Boxes
-      Topic: /ground_plane_cloud
-      Unreliable: false
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: true
   Enabled: true
   Global Options:
     Background Color: 0; 0; 0
@@ -703,7 +684,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/ThirdPersonFollower
-      Distance: 17.572145462036133
+      Distance: 25.759920120239258
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -711,17 +692,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: -0.8253719806671143
-        Y: 2.074887275695801
-        Z: 2.273391146445647e-05
+        X: 8.797622680664062
+        Y: 2.753127336502075
+        Z: 2.0744448192999698e-05
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5197969675064087
+      Pitch: 1.5647963285446167
       Target Frame: global
-      Yaw: 0.5847827792167664
+      Yaw: 4.789758205413818
     Saved: ~
 Window Geometry:
   Displays:

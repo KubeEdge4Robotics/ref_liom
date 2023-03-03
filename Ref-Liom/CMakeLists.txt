@@ -31,6 +31,7 @@ add_message_files(
   DIRECTORY msg
   FILES
   cloud_info.msg
+	header_idx.msg
 )
 
 add_service_files(
